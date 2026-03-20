@@ -557,6 +557,14 @@ export const useGameStore = create<GameState>()(
     let newOuts = state.outs;
     const details: string[] = [];
 
+    // CRITICAL: Clear all runners from their original bases FIRST
+    // Without this, runners who advance or score leave phantom copies behind
+    pending.runnersToResolve.forEach(r => {
+      if (r.fromBase === 'first') newBases.first = null;
+      if (r.fromBase === 'second') newBases.second = null;
+      if (r.fromBase === 'third') newBases.third = null;
+    });
+
     // Apply runner resolutions
     pending.resolvedRunners.forEach(r => {
       const name = getPlayerName(state, r.playerId);

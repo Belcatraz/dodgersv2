@@ -34,28 +34,33 @@ export default function BaseballField() {
   };
 
   const handleInitialOutcome = (type: 'hit' | 'out' | 'error', detail: string) => {
+    if (type === 'out') {
+      // Outs don't need trajectory — handle immediately
+      if (!tapLocation) return;
+      if ((detail === 'Forceout' || detail === 'Groundout') && (bases.first || bases.second || bases.third)) {
+        initiateForceOut(detail as OutType, tapLocation.x, tapLocation.y);
+      } else {
+        logOffensiveOut(detail as OutType, tapLocation.x, tapLocation.y);
+      }
+      setTapLocation(null);
+      setPendingOutcome(null);
+      return;
+    }
+    // Hits and errors go to trajectory picker
     setPendingOutcome({ type, detail });
   };
 
   const finalizeOffensiveOutcome = (trajectory: HitTrajectory) => {
     if (!tapLocation || !pendingOutcome) return;
     const { type, detail } = pendingOutcome;
-    
+
     if (type === 'hit') {
       initiateHit(detail as HitType, trajectory, tapLocation.x, tapLocation.y);
-    }
-    if (type === 'out') {
-      // Check if it's a forceout/groundout and runners are on base
-      if ((detail === 'Forceout' || detail === 'Groundout') && (bases.first || bases.second || bases.third)) {
-        initiateForceOut(detail as OutType, tapLocation.x, tapLocation.y);
-      } else {
-        logOffensiveOut(detail as OutType, tapLocation.x, tapLocation.y);
-      }
     }
     if (type === 'error') {
       logOffensiveError(trajectory, tapLocation.x, tapLocation.y);
     }
-    
+
     setTapLocation(null);
     setPendingOutcome(null);
   };

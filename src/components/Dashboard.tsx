@@ -103,42 +103,12 @@ function countPitchTypes(abs: AtBatState[]): { takes: number; total: number } {
   return { takes, total };
 }
 
-// ── Defensive stat helpers ───────────────────────────────────────────────────
-
-type DefPosStats = { outs: number; clean: number; errors: number; total: number };
-type PlayerDefStat = { id: string; name: string; byPosition: ({ pos: string } & DefPosStats)[]; totalPlays: number; totalOuts: number; totalErrors: number };
-
-function computeDefStats(
-  actions: { position: string; playerId: string | null; result: string }[],
-  nameMap: Record<string, string>
-): PlayerDefStat[] {
-  const playerMap: Record<string, Record<string, { outs: number; clean: number; errors: number }>> = {};
-  actions.forEach(({ position: pos, playerId, result }) => {
-    const id = playerId || 'Unknown';
-    if (!playerMap[id]) playerMap[id] = {};
-    if (!playerMap[id][pos]) playerMap[id][pos] = { outs: 0, clean: 0, errors: 0 };
-    const s = playerMap[id][pos];
-    if (result === 'Out') s.outs++;
-    else if (result === 'Fielded Cleanly') s.clean++;
-    else s.errors++;
-  });
-  return Object.entries(playerMap).map(([id, positions]) => {
-    const byPosition = Object.entries(positions).map(([pos, s]) => ({
-      pos, ...s, total: s.outs + s.clean + s.errors,
-    })).sort((a, b) => b.total - a.total);
-    const totalPlays = byPosition.reduce((sum, p) => sum + p.total, 0);
-    const totalOuts = byPosition.reduce((sum, p) => sum + p.outs, 0);
-    const totalErrors = byPosition.reduce((sum, p) => sum + p.errors, 0);
-    return { id, name: nameMap[id] ?? 'Unknown', byPosition, totalPlays, totalOuts, totalErrors };
-  }).sort((a, b) => b.totalPlays - a.totalPlays);
-}
-
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 type ViewTab = 'stats' | 'log' | 'season' | 'history';
 
 export default function Dashboard() {
-  const { roster, atBats, defensiveActions, gameStarted, endAndSaveGame, gameHistory, inningLog, deleteHistoricalGame, updateInningLogEntries, toggleGameExclusion } = useGameStore();
+  const { roster, atBats, gameStarted, endAndSaveGame, gameHistory, inningLog, deleteHistoricalGame, updateInningLogEntries, toggleGameExclusion } = useGameStore();
 
   const coachView = isCoachView();
   const [activeTab, setActiveTab] = useState<ViewTab>(coachView ? 'season' : 'stats');
@@ -200,13 +170,6 @@ export default function Dashboard() {
   const activeBatter = selectedBatter || roster[0]?.id || '';
   const currentGameHits = useMemo(() => extractHits(atBats.filter(ab => ab.batterId === activeBatter)), [atBats, activeBatter]);
 
-  // ── Defensive stats ────────────────────────────────────────────────────────
-  const defMetrics = useMemo(() => {
-    const nameMap: Record<string, string> = {};
-    roster.forEach(p => { nameMap[p.id] = p.name; });
-    return computeDefStats(defensiveActions, nameMap);
-  }, [defensiveActions, roster]);
-
   // ── Inning log grouped ─────────────────────────────────────────────────────
   const groupedLog = useMemo(() => {
     const groups: { key: string; inning: number; isOffense: boolean; entries: InningLogEntry[]; indices: number[] }[] = [];
@@ -260,13 +223,6 @@ export default function Dashboard() {
     const allAtBats = [...includedGames.flatMap(g => g.atBats), ...atBats].filter(ab => ab.batterId === activeSeasonBatter);
     return extractHits(allAtBats);
   }, [includedGames, atBats, activeSeasonBatter]);
-
-  const seasonDefStats = useMemo(() => {
-    const allActions = [...includedGames.flatMap(g => g.defensiveActions ?? []), ...defensiveActions];
-    const nameMap: Record<string, string> = {};
-    roster.forEach(p => { nameMap[p.id] = p.name; });
-    return computeDefStats(allActions, nameMap);
-  }, [includedGames, defensiveActions, roster]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -371,40 +327,6 @@ export default function Dashboard() {
             <SprayChart hits={currentGameHits} />
           </section>
 
-          {defMetrics.length > 0 && (
-            <section>
-              <h3 style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>Defense</h3>
-              <div className="flex-col gap-sm">
-                {defMetrics.map(stat => (
-                  <div key={stat.id} style={{ backgroundColor: 'var(--bg-card)', borderRadius: '8px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <div className="flex-row justify-between items-center">
-                      <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{stat.name}</span>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{stat.totalPlays} plays</span>
-                    </div>
-                    {stat.byPosition.map(p => (
-                      <div key={p.pos} style={{ paddingLeft: '8px', borderLeft: '2px solid #333', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <div className="flex-row justify-between items-center">
-                          <span style={{ fontSize: '0.75rem', color: '#aaa', fontWeight: 'bold' }}>{p.pos}</span>
-                          <div className="flex-row" style={{ gap: '8px', fontSize: '0.72rem' }}>
-                            <span style={{ color: '#4caf50' }}>✓ {p.outs} out{p.outs !== 1 ? 's' : ''}</span>
-                            <span style={{ color: '#2196f3' }}>⚡ {p.clean} clean</span>
-                            {p.errors > 0 && <span style={{ color: '#ef5350' }}>✗ {p.errors} err</span>}
-                          </div>
-                        </div>
-                        {p.total > 0 && (
-                          <div style={{ width: '100%', height: '3px', backgroundColor: '#333', display: 'flex', borderRadius: '2px', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', backgroundColor: '#4caf50', width: `${(p.outs / p.total) * 100}%` }} />
-                            <div style={{ height: '100%', backgroundColor: '#2196f3', width: `${(p.clean / p.total) * 100}%` }} />
-                            <div style={{ height: '100%', backgroundColor: '#ef5350', width: `${(p.errors / p.total) * 100}%` }} />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </>
       )}
 
@@ -540,40 +462,6 @@ export default function Dashboard() {
                 <SprayChart hits={seasonHits} />
               </section>
 
-              {seasonDefStats.length > 0 && (
-                <section>
-                  <h3 style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>Season Defense</h3>
-                  <div className="flex-col gap-sm">
-                    {seasonDefStats.map(stat => (
-                      <div key={stat.id} style={{ backgroundColor: 'var(--bg-card)', borderRadius: '8px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <div className="flex-row justify-between items-center">
-                          <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{stat.name}</span>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{stat.totalPlays} plays · {stat.totalOuts} outs · {stat.totalErrors} err</span>
-                        </div>
-                        {stat.byPosition.map(p => (
-                          <div key={p.pos} style={{ paddingLeft: '8px', borderLeft: '2px solid #333', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                            <div className="flex-row justify-between items-center">
-                              <span style={{ fontSize: '0.75rem', color: '#aaa', fontWeight: 'bold' }}>{p.pos}</span>
-                              <div className="flex-row" style={{ gap: '8px', fontSize: '0.72rem' }}>
-                                <span style={{ color: '#4caf50' }}>✓ {p.outs} out{p.outs !== 1 ? 's' : ''}</span>
-                                <span style={{ color: '#2196f3' }}>⚡ {p.clean} clean</span>
-                                {p.errors > 0 && <span style={{ color: '#ef5350' }}>✗ {p.errors} err</span>}
-                              </div>
-                            </div>
-                            {p.total > 0 && (
-                              <div style={{ width: '100%', height: '3px', backgroundColor: '#333', display: 'flex', borderRadius: '2px', overflow: 'hidden' }}>
-                                <div style={{ height: '100%', backgroundColor: '#4caf50', width: `${(p.outs / p.total) * 100}%` }} />
-                                <div style={{ height: '100%', backgroundColor: '#2196f3', width: `${(p.clean / p.total) * 100}%` }} />
-                                <div style={{ height: '100%', backgroundColor: '#ef5350', width: `${(p.errors / p.total) * 100}%` }} />
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
             </>
           )}
         </>
