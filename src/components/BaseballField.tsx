@@ -1,29 +1,13 @@
 import { useState, useRef } from 'react';
 import { useGameStore } from '../store';
-import type { HitType, OutType, HitTrajectory, DefensiveEvent } from '../store';
-
-const DEFENSIVE_POSITIONS = [
-  { id: 'P', name: 'Pitcher', x: 50, y: 65 },
-  { id: 'C', name: 'Catcher', x: 50, y: 95 },
-  { id: '1B', name: '1st Base', x: 75, y: 48 },
-  { id: '2B', name: '2nd Base', x: 65, y: 35 },
-  { id: 'SS', name: 'Shortstop', x: 35, y: 35 },
-  { id: '3B', name: '3rd Base', x: 25, y: 48 },
-  { id: 'LF', name: 'Left Field', x: 15, y: 20 },
-  { id: 'LC', name: 'Left Center', x: 35, y: 15 },
-  { id: 'RC', name: 'Right Center', x: 65, y: 15 },
-  { id: 'RF', name: 'Right Field', x: 85, y: 20 },
-  { id: 'UTIL', name: 'Utility', x: 50, y: 7 },
-];
+import type { HitType, OutType, HitTrajectory } from '../store';
 
 export default function BaseballField() {
-  const { mode, initiateHit, logOffensiveOut, logOffensiveError, initiateForceOut, 
-          logDefensiveAction, roster, bases, defensiveAssignments, assignDefensivePosition,
-          pendingRunnerResolution, resolveNextRunner, pendingForceOut, resolveForceOut } = useGameStore();
+  const { mode, initiateHit, logOffensiveOut, logOffensiveError, initiateForceOut,
+          logDefensiveAction, scoreOpponentRun, roster, bases,
+          pendingRunnerResolution, resolveNextRunner, pendingForceOut, resolveForceOut, opponentRunsThisInning } = useGameStore();
   const [tapLocation, setTapLocation] = useState<{x: number, y: number} | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{type: 'hit' | 'out' | 'error', detail: string} | null>(null);
-  const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
-  const [isSetupDefense, setIsSetupDefense] = useState(false);
   
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -47,7 +31,6 @@ export default function BaseballField() {
   const cancelTap = () => {
     setTapLocation(null);
     setPendingOutcome(null);
-    setSelectedPosition(null);
   };
 
   const handleInitialOutcome = (type: 'hit' | 'out' | 'error', detail: string) => {
@@ -77,17 +60,6 @@ export default function BaseballField() {
     setPendingOutcome(null);
   };
 
-  const handleDefensiveOutcome = (result: DefensiveEvent) => {
-    if (!selectedPosition) return;
-    logDefensiveAction(selectedPosition, result);
-    setSelectedPosition(null);
-  };
-
-  const handlePositionClick = (e: React.MouseEvent, posId: string) => {
-    if (mode !== 'defense') return;
-    e.stopPropagation();
-    setSelectedPosition(posId);
-  };
 
   // Current runner being resolved
   const currentResolveRunner = pendingRunnerResolution && 
@@ -146,74 +118,47 @@ export default function BaseballField() {
           <circle cx={tapLocation.x} cy={tapLocation.y} r="3" fill="var(--dodger-red)" />
         )}
 
-        {/* Defensive Positions Overlay */}
-        {mode === 'defense' && DEFENSIVE_POSITIONS.map(pos => {
-          const isSelected = selectedPosition === pos.id;
-          const assignedPlayerId = defensiveAssignments[pos.id];
-          const assignedPlayer = roster.find(p => p.id === assignedPlayerId);
-          const isUnassigned = !assignedPlayer;
-          const dotColor = isSelected ? 'var(--dodger-red)' : (isSetupDefense && isUnassigned) ? '#ffb300' : (!isUnassigned ? 'var(--dodger-blue)' : '#555');
-          const r = isSetupDefense ? "6" : "4";
-          return (
-            <g key={pos.id} onClick={(e) => handlePositionClick(e, pos.id)} style={{cursor: 'pointer'}}>
-              <circle cx={pos.x} cy={pos.y} r={r} fill={dotColor} stroke="white" strokeWidth="0.5" />
-              <text x={pos.x} y={pos.y + 1} fontSize={isSetupDefense ? "3.5" : "3"} fill="white" textAnchor="middle" dominantBaseline="middle" fontWeight="bold" pointerEvents="none">
-                {pos.id}
-              </text>
-              {/* Always show player name in setup mode; show outside dot in play mode */}
-              {assignedPlayer && isSetupDefense && (
-                <text x={pos.x} y={pos.y - 8} fontSize="3" fill="white" textAnchor="middle" fontWeight="bold" stroke="black" strokeWidth="0.4" paintOrder="stroke" pointerEvents="none">
-                  {assignedPlayer.name.substring(0, 8)}
-                </text>
-              )}
-              {assignedPlayer && !isSetupDefense && (
-                <text x={pos.x} y={pos.y - 5} fontSize="3" fill="white" textAnchor="middle" fontWeight="bold" stroke="black" strokeWidth="0.4" paintOrder="stroke" pointerEvents="none">
-                  {assignedPlayer.name.substring(0, 6)}
-                </text>
-              )}
-            </g>
-          );
-        })}
       </svg>
 
-      {/* Defense Setup Toggle + assignment summary */}
-      {mode === 'defense' && !selectedPosition && (
+      {/* Defense Mode: Simple Button Controls */}
+      {mode === 'defense' && (
         <>
-          <div style={{position: 'absolute', top: '16px', right: '16px', zIndex: 5}}>
+          {/* Opponent Runs at Top */}
+          <div style={{position: 'absolute', top: '16px', left: '50%', transform: 'translateX(-50%)', zIndex: 5}}>
+            <div style={{
+              backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: '8px', padding: '8px 14px',
+              textAlign: 'center'
+            }}>
+              <span style={{color: '#ff9800', fontSize: '0.85rem', fontWeight: 'bold'}}>
+                Opp Runs This Inning: {opponentRunsThisInning}
+              </span>
+            </div>
+          </div>
+
+          {/* Three Control Buttons */}
+          <div style={{position: 'absolute', bottom: '16px', left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'flex', flexDirection: 'column', gap: '8px', width: '90%', maxWidth: '300px'}}>
             <button
-              className={`huge-btn ${isSetupDefense ? 'btn-danger' : 'btn-secondary'}`}
-              style={{fontSize: '0.875rem', height: '40px'}}
-              onClick={() => setIsSetupDefense(!isSetupDefense)}
+              className="huge-btn"
+              style={{backgroundColor: '#1a237e', border: '2px solid #3f51b5', color: 'white', fontSize: '1rem', fontWeight: 'bold', height: '48px', borderRadius: '10px'}}
+              onClick={() => logDefensiveAction('K', 'Out')}
             >
-              {isSetupDefense ? 'Done' : 'Change Positions'}
+              K — Strikeout
+            </button>
+            <button
+              className="huge-btn"
+              style={{backgroundColor: '#4caf50', color: 'white', fontSize: '1rem', fontWeight: 'bold', height: '48px', borderRadius: '10px'}}
+              onClick={() => scoreOpponentRun()}
+            >
+              Opponent Scored
+            </button>
+            <button
+              className="huge-btn"
+              style={{backgroundColor: 'var(--dodger-red)', color: 'white', fontSize: '1rem', fontWeight: 'bold', height: '48px', borderRadius: '10px'}}
+              onClick={() => logDefensiveAction('DEF', 'Out')}
+            >
+              Recorded Out
             </button>
           </div>
-          {!isSetupDefense && (
-            <div style={{position: 'absolute', bottom: '16px', left: '50%', transform: 'translateX(-50%)', zIndex: 5}}>
-              <button
-                className="huge-btn"
-                style={{backgroundColor: '#1a237e', border: '2px solid #3f51b5', color: 'white', fontSize: '1.1rem', fontWeight: 'bold', height: '48px', padding: '0 24px', borderRadius: '10px', letterSpacing: '0.05em'}}
-                onClick={() => logDefensiveAction('K', 'Out')}
-              >
-                K — Strikeout
-              </button>
-            </div>
-          )}
-          {isSetupDefense && (() => {
-            const assigned = DEFENSIVE_POSITIONS.filter(p => defensiveAssignments[p.id]);
-            const unassigned = DEFENSIVE_POSITIONS.filter(p => !defensiveAssignments[p.id]);
-            return (
-              <div style={{
-                position: 'absolute', top: '16px', left: '16px', zIndex: 5,
-                backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: '8px', padding: '6px 10px',
-              }}>
-                <span style={{color: '#4caf50', fontSize: '0.8rem', fontWeight: 'bold'}}>{assigned.length} assigned</span>
-                {unassigned.length > 0 && (
-                  <span style={{color: '#ffb300', fontSize: '0.8rem', marginLeft: '8px'}}>{unassigned.length} open</span>
-                )}
-              </div>
-            );
-          })()}
         </>
       )}
 
@@ -319,157 +264,6 @@ export default function BaseballField() {
         </div>
       )}
 
-      {/* Defense Outcome Menu */}
-      {selectedPosition && mode === 'defense' && !isSetupDefense && (
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0, 
-          backgroundColor: 'var(--bg-card)', padding: '16px', borderTopLeftRadius: '20px', borderTopRightRadius: '20px',
-          boxShadow: '0 -4px 12px rgba(0,0,0,0.5)', zIndex: 10,
-          display: 'flex', flexDirection: 'column', gap: '8px'
-        }}>
-          {(() => {
-            const pid = defensiveAssignments[selectedPosition];
-            const p = roster.find(r => r.id === pid);
-            return <h3 style={{marginBottom: '4px', textAlign: 'center'}}>{selectedPosition} {p ? `(${p.name})` : ''} Action</h3>;
-          })()}
-          <div className="flex-row gap-sm">
-             <button className="huge-btn flex-1" style={{backgroundColor: '#4caf50', color: 'white', fontSize: '1rem'}} onClick={() => handleDefensiveOutcome('Out')}>Recorded Out</button>
-             <button className="huge-btn flex-1" style={{backgroundColor: '#2196f3', color: 'white', fontSize: '1rem'}} onClick={() => handleDefensiveOutcome('Fielded Cleanly')}>Clean / No Out</button>
-          </div>
-          <div className="flex-row gap-sm">
-             <button className="huge-btn flex-1" style={{backgroundColor: 'var(--dodger-red)', color: 'white', fontSize: '0.875rem'}} onClick={() => handleDefensiveOutcome('Fielding Error')}>Fielding Error</button>
-             <button className="huge-btn flex-1" style={{backgroundColor: 'var(--dodger-red)', color: 'white', fontSize: '0.875rem'}} onClick={() => handleDefensiveOutcome('Throwing Error')}>Throwing Error</button>
-          </div>
-          <div className="flex-row gap-sm">
-             <button className="huge-btn flex-1" style={{backgroundColor: '#b71c1c', color: 'white', fontSize: '0.875rem'}} onClick={() => handleDefensiveOutcome('Fielding & Throwing Error')}>Both Errors</button>
-             <button className="huge-btn btn-secondary flex-1" onClick={cancelTap}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {/* Defense Setup Menu — custom player picker */}
-      {selectedPosition && mode === 'defense' && isSetupDefense && (() => {
-        const posInfo = DEFENSIVE_POSITIONS.find(p => p.id === selectedPosition);
-        const currentAssigneeId = defensiveAssignments[selectedPosition];
-
-        // Build a map: playerId → positionId they're assigned to
-        const playerPosMap: Record<string, string> = {};
-        Object.entries(defensiveAssignments).forEach(([pos, pid]) => {
-          if (pid) playerPosMap[pid] = pos;
-        });
-
-        return (
-          <div
-            onClick={() => setSelectedPosition(null)}
-            style={{
-              position: 'absolute', inset: 0,
-              backgroundColor: 'rgba(0,0,0,0.6)',
-              zIndex: 10,
-              display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
-            }}
-          >
-            <div
-              onClick={e => e.stopPropagation()}
-              style={{
-                backgroundColor: '#1e1e1e',
-                borderRadius: '16px 16px 0 0',
-                maxHeight: '70vh',
-                overflowY: 'auto',
-              }}
-            >
-              {/* Header */}
-              <div style={{
-                padding: '14px 20px', borderBottom: '1px solid #333',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                position: 'sticky', top: 0, backgroundColor: '#1e1e1e', zIndex: 1,
-              }}>
-                <div>
-                  <span style={{fontWeight: 'bold', fontSize: '1.1rem', color: 'white'}}>
-                    Assign {posInfo?.name ?? selectedPosition}
-                  </span>
-                  {currentAssigneeId && (
-                    <span style={{fontSize: '0.75rem', color: '#aaa', marginLeft: '8px'}}>
-                      currently: {getPlayerName(currentAssigneeId)}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => setSelectedPosition(null)}
-                  style={{background: 'none', border: 'none', color: '#888', fontSize: '1.25rem', cursor: 'pointer', padding: '4px 8px'}}
-                >✕</button>
-              </div>
-
-              {/* Clear option */}
-              {currentAssigneeId && (
-                <div
-                  onClick={() => { assignDefensivePosition(selectedPosition, null); setSelectedPosition(null); }}
-                  style={{
-                    padding: '14px 20px', borderBottom: '1px solid #2a2a2a',
-                    display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer',
-                  }}
-                >
-                  <span style={{fontSize: '1.1rem', color: 'var(--dodger-red)'}}>✕ Clear position</span>
-                </div>
-              )}
-
-              {/* Roster players */}
-              {roster.map(p => {
-                const isCurrent = p.id === currentAssigneeId;
-                const assignedPos = playerPosMap[p.id];
-                const isElsewhere = assignedPos && assignedPos !== selectedPosition;
-
-                return (
-                  <div
-                    key={p.id}
-                    onClick={() => { assignDefensivePosition(selectedPosition, p.id); setSelectedPosition(null); }}
-                    style={{
-                      padding: '14px 20px', borderBottom: '1px solid #2a2a2a',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      cursor: 'pointer',
-                      backgroundColor: isCurrent ? 'rgba(0,90,156,0.25)' : 'transparent',
-                    }}
-                  >
-                    <span style={{
-                      fontSize: '1.15rem', fontWeight: '600',
-                      color: isElsewhere ? '#888' : 'white',
-                    }}>
-                      {p.name}
-                    </span>
-                    <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-                      {isCurrent && (
-                        <span style={{fontSize: '0.7rem', backgroundColor: 'var(--dodger-blue)', color: 'white', padding: '3px 8px', borderRadius: '4px'}}>
-                          HERE
-                        </span>
-                      )}
-                      {isElsewhere && (
-                        <span style={{fontSize: '0.75rem', backgroundColor: '#333', color: '#aaa', padding: '3px 8px', borderRadius: '4px'}}>
-                          at {assignedPos}
-                        </span>
-                      )}
-                      {!isCurrent && !isElsewhere && (
-                        <span style={{fontSize: '0.75rem', color: '#4caf50'}}>available</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              <div style={{padding: '16px 20px'}}>
-                <button
-                  onClick={() => setSelectedPosition(null)}
-                  style={{
-                    width: '100%', padding: '14px',
-                    backgroundColor: '#2a2a2a', color: '#aaa',
-                    border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '1rem',
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }

@@ -7,7 +7,7 @@ import { isCoachView } from './isCoachView';
 import './App.css';
 
 function App() {
-  const { mode, inning, outs, runsThisInning, runsTotal, gameStarted, undo, pastStates,
+  const { mode, inning, outs, runsThisInning, runsTotal, opponentRunsThisInning, opponentRunsTotal, gameStarted, undo, pastStates,
           bases, roster, manualSwitchToDefense, manualSwitchToOffense } = useGameStore();
 
   if (isCoachView()) {
@@ -61,10 +61,17 @@ function App() {
                 <span style={{fontSize: '1.25rem', fontWeight: 'bold', minWidth: '16px', textAlign: 'center'}}>{inning}</span>
               </div>
             </div>
-            <div className="flex-col items-center" style={{lineHeight: 1.1}}>
-              <span style={{color: 'var(--text-secondary)', fontSize: '0.65rem'}}>Runs</span>
-              <span style={{fontSize: '1rem', fontWeight: 'bold'}}>{runsThisInning} <span style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>(Tot: {runsTotal})</span></span>
-            </div>
+            {mode === 'defense' ? (
+              <div className="flex-col items-center" style={{lineHeight: 1.1}}>
+                <span style={{color: 'var(--text-secondary)', fontSize: '0.65rem'}}>Opp Runs</span>
+                <span style={{fontSize: '1rem', fontWeight: 'bold'}}>{opponentRunsThisInning} <span style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>(Tot: {opponentRunsTotal})</span></span>
+              </div>
+            ) : (
+              <div className="flex-col items-center" style={{lineHeight: 1.1}}>
+                <span style={{color: 'var(--text-secondary)', fontSize: '0.65rem'}}>Runs</span>
+                <span style={{fontSize: '1rem', fontWeight: 'bold'}}>{runsThisInning} <span style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>(Tot: {runsTotal})</span></span>
+              </div>
+            )}
             <div className="flex-col items-end" style={{lineHeight: 1.1}}>
               <span style={{color: 'var(--text-secondary)', fontSize: '0.65rem'}}>Outs</span>
               <span style={{fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--dodger-red)'}}>{outs}</span>

@@ -49,6 +49,7 @@ export type HistoricalGame = {
   opponent: string;
   runsScored: number;
   opponentScore: number;
+  opponentRunsTotal?: number;  // Added for opponent run tracking
   atBats: AtBatState[];
   defensiveActions: { position: string; playerId: string | null; result: DefensiveEvent }[];
   inningLog: InningLogEntry[];
@@ -58,14 +59,15 @@ export type HistoricalGame = {
 // State that the baserunner resolution overlay needs
 export type PendingRunnerResolution = {
   batterId: string;
-  hitType: HitType | 'error';
-  trajectory: HitTrajectory;
-  x: number;
-  y: number;
+  hitType: HitType | 'error' | 'forceout';
+  trajectory?: HitTrajectory;
+  x?: number;
+  y?: number;
   runnersToResolve: { playerId: string; fromBase: 'first' | 'second' | 'third' }[];
   resolvedRunners: { playerId: string; fromBase: string; toBase: string }[];
   currentRunnerIndex: number;
   batterPlaced: boolean;  // has batter been placed on base yet
+  skipOutCount?: boolean;  // for forceout: don't count another out
 };
 
 export type PendingForceOut = {
@@ -83,6 +85,8 @@ export interface GameState {
   outs: number;
   runsThisInning: number;
   runsTotal: number;
+  opponentRunsThisInning: number;
+  opponentRunsTotal: number;
   bases: Bases;
 
   roster: Player[];
@@ -142,6 +146,7 @@ export interface GameState {
   updateInningLogEntries: (indices: number[], newInning: number) => void;
 
   scoreRun: () => void;
+  scoreOpponentRun: () => void;
   endAndSaveGame: (opponentName: string, opponentScore: number) => void;
   toggleGameExclusion: (id: string) => void;
 }
@@ -153,6 +158,8 @@ const initialState = {
   outs: 0,
   runsThisInning: 0,
   runsTotal: 0,
+  opponentRunsThisInning: 0,
+  opponentRunsTotal: 0,
   bases: { first: null, second: null, third: null } as Bases,
   roster: [] as Player[],
   lineup: [] as string[],
@@ -177,7 +184,7 @@ const functionKeys: (keyof GameState)[] = [
   'reorderLineup', 'startNextAtBat', 'logPitch', 'initiateHit', 'resolveNextRunner',
   'finalizeHitResolution', 'initiateForceOut', 'resolveForceOut',
   'logOffensiveOut', 'logOffensiveError', 'logDefensiveAction',
-  'scoreRun', 'endAndSaveGame', 'manualNextInning', 'manualSwitchToDefense',
+  'scoreRun', 'scoreOpponentRun', 'endAndSaveGame', 'manualNextInning', 'manualSwitchToDefense',
   'manualSwitchToOffense', 'injectMockGame', 'deleteHistoricalGame', 'pastStates',
   'setManualInning', 'setCurrentBatterIndex', 'setLineupSet', 'pushToLineup',
   'addLateJoinerToLineup', 'updateInningLogEntries', 'toggleGameExclusion'
@@ -532,12 +539,20 @@ export const useGameStore = create<GameState>()(
     const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
 
     const isError = pending.hitType === 'error';
-    const completedAtBat = isError
-      ? { ...currentAtBat, events: [...currentAtBat.events, { type: 'error' as const, trajectory: pending.trajectory, x: pending.x, y: pending.y }] }
-      : { ...currentAtBat, events: [...currentAtBat.events, { type: 'hit' as const, hitType: pending.hitType as HitType, trajectory: pending.trajectory, x: pending.x, y: pending.y }] };
+    const isForceout = pending.hitType === 'forceout';
 
-    // Build new bases
-    const newBases: Bases = { first: null, second: null, third: null };
+    let completedAtBat;
+    if (isForceout) {
+      // For forceout, we already have the out event from resolveForceOut
+      completedAtBat = { ...currentAtBat };
+    } else if (isError) {
+      completedAtBat = { ...currentAtBat, events: [...currentAtBat.events, { type: 'error' as const, trajectory: pending.trajectory!, x: pending.x!, y: pending.y! }] };
+    } else {
+      completedAtBat = { ...currentAtBat, events: [...currentAtBat.events, { type: 'hit' as const, hitType: pending.hitType as HitType, trajectory: pending.trajectory!, x: pending.x!, y: pending.y! }] };
+    }
+
+    // Build new bases from current bases (for forceout, bases are already updated)
+    const newBases: Bases = { ...state.bases };
     let runsScored = 0;
     let newOuts = state.outs;
     const details: string[] = [];
@@ -562,21 +577,28 @@ export const useGameStore = create<GameState>()(
       }
     });
 
-    // Place batter: errors = batter goes to 1st (like a single)
-    if (pending.hitType === '1B' || pending.hitType === 'error') newBases.first = pending.batterId;
-    if (pending.hitType === '2B') newBases.second = pending.batterId;
-    if (pending.hitType === '3B') newBases.third = pending.batterId;
+    // Place batter only if not already placed (forceout already placed batter)
+    if (!pending.skipOutCount) {
+      if (pending.hitType === '1B' || pending.hitType === 'error') newBases.first = pending.batterId;
+      if (pending.hitType === '2B') newBases.second = pending.batterId;
+      if (pending.hitType === '3B') newBases.third = pending.batterId;
+    }
 
     let nextRunsInning = state.runsThisInning + runsScored;
     const nextRunsTotal = state.runsTotal + runsScored;
     const nextInning = state.inning;
     let nextMode = state.mode;
 
-    // RBIs on errors = 0 (errors don't count as RBIs in baseball)
+    // RBIs on errors = 0, forceout = 0
+    let resultStr = pending.hitType as string;
+    let rbis = runsScored;
+    if (isError) resultStr = 'ROE';
+    if (isForceout) rbis = 0;
+
     const logEntry: InningLogEntry = {
       inning: state.inning, isOffense: true, batterId: currentAtBat.batterId,
       batterName: getPlayerName(state, currentAtBat.batterId),
-      result: isError ? 'ROE' : pending.hitType as string, details, rbis: isError ? 0 : runsScored, outsAfter: newOuts
+      result: resultStr, details, rbis, outsAfter: newOuts
     };
 
     // Check 3-out rule
@@ -648,19 +670,7 @@ export const useGameStore = create<GameState>()(
     if (!pending || !state.currentAtBat) return;
 
     const newPast = pushUndo(state);
-    const { lineup, currentBatterIndex, atBats, currentAtBat } = state;
-    const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
-    const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
-
-    const completedAtBat = {
-      ...currentAtBat,
-      events: [...currentAtBat.events, { type: 'out' as const, outType: pending.outType, x: pending.x, y: pending.y }]
-    };
-
-    let nextOuts = state.outs + 1;
-    const nextInning = state.inning;
-    let nextRuns = state.runsThisInning;
-    let nextMode = state.mode;
+    const nextOuts = state.outs + 1;
     const newBases = { ...state.bases };
     const details: string[] = [];
 
@@ -678,37 +688,105 @@ export const useGameStore = create<GameState>()(
       newBases.first = pending.batterId;
     }
 
-    const logEntry: InningLogEntry = {
-      inning: state.inning, isOffense: true, batterId: currentAtBat.batterId,
-      batterName: getPlayerName(state, currentAtBat.batterId),
-      result: pending.outType, details, rbis: 0, outsAfter: nextOuts
-    };
-
+    // Check if 3 outs achieved
     if (nextOuts >= 3) {
-      nextOuts = 0;
-      nextMode = 'defense';
-      nextRuns = 0;
-      newBases.first = null;
-      newBases.second = null;
-      newBases.third = null;
+      // End of inning — finalize immediately
+      const completedAtBat = {
+        ...state.currentAtBat,
+        events: [...state.currentAtBat.events, { type: 'out' as const, outType: pending.outType, x: pending.x, y: pending.y }]
+      };
+      const { lineup, currentBatterIndex } = state;
+      const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, state.currentAtBat.batterId);
+      const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+
+      const logEntry: InningLogEntry = {
+        inning: state.inning, isOffense: true, batterId: state.currentAtBat.batterId,
+        batterName: getPlayerName(state, state.currentAtBat.batterId),
+        result: pending.outType, details, rbis: 0, outsAfter: nextOuts
+      };
+
+      set({
+        pastStates: newPast,
+        atBats: [...state.atBats, completedAtBat],
+        currentAtBat: null,
+        currentBatterIndex: nextIndex,
+        outs: 0,
+        inning: state.inning,
+        runsThisInning: 0,
+        bases: { first: null, second: null, third: null },
+        mode: 'defense',
+        inningLog: [...state.inningLog, logEntry],
+        pendingForceOut: null,
+        battedThisCycle: newBatted,
+        isLineupSet: newIsLineupSet,
+      });
+      get().startNextAtBat();
+      return;
     }
 
+    // 3 outs not reached — check if there are remaining runners
+    const remainingRunners: PendingRunnerResolution['runnersToResolve'] = [];
+    // Don't include the forced player or the batter
+    if (newBases.third && newBases.third !== forcedPlayerId) {
+      remainingRunners.push({ playerId: newBases.third, fromBase: 'third' });
+    }
+    if (newBases.second && newBases.second !== forcedPlayerId) {
+      remainingRunners.push({ playerId: newBases.second, fromBase: 'second' });
+    }
+    if (newBases.first && newBases.first !== forcedPlayerId && newBases.first !== pending.batterId) {
+      remainingRunners.push({ playerId: newBases.first, fromBase: 'first' });
+    }
+
+    if (remainingRunners.length === 0) {
+      // No remaining runners — just finalize normally
+      const completedAtBat = {
+        ...state.currentAtBat,
+        events: [...state.currentAtBat.events, { type: 'out' as const, outType: pending.outType, x: pending.x, y: pending.y }]
+      };
+      const { lineup, currentBatterIndex } = state;
+      const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, state.currentAtBat.batterId);
+      const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+
+      const logEntry: InningLogEntry = {
+        inning: state.inning, isOffense: true, batterId: state.currentAtBat.batterId,
+        batterName: getPlayerName(state, state.currentAtBat.batterId),
+        result: pending.outType, details, rbis: 0, outsAfter: nextOuts
+      };
+
+      set({
+        pastStates: newPast,
+        atBats: [...state.atBats, completedAtBat],
+        currentAtBat: null,
+        currentBatterIndex: nextIndex,
+        outs: nextOuts,
+        inning: state.inning,
+        runsThisInning: state.runsThisInning,
+        bases: newBases,
+        mode: state.mode,
+        inningLog: [...state.inningLog, logEntry],
+        pendingForceOut: null,
+        battedThisCycle: newBatted,
+        isLineupSet: newIsLineupSet,
+      });
+      get().startNextAtBat();
+      return;
+    }
+
+    // Remaining runners exist — enter resolution mode
     set({
-      pastStates: newPast,
-      atBats: [...atBats, completedAtBat],
-      currentAtBat: null,
-      currentBatterIndex: nextIndex,
-      outs: nextOuts,
-      inning: nextInning,
-      runsThisInning: nextRuns,
+      pendingRunnerResolution: {
+        batterId: state.currentAtBat.batterId,
+        hitType: 'forceout',
+        runnersToResolve: remainingRunners,
+        resolvedRunners: [],
+        currentRunnerIndex: 0,
+        batterPlaced: true,
+        skipOutCount: true,
+      },
       bases: newBases,
-      mode: nextMode,
-      inningLog: [...state.inningLog, logEntry],
+      outs: nextOuts,
       pendingForceOut: null,
-      battedThisCycle: newBatted,
-      isLineupSet: newIsLineupSet,
     });
-    get().startNextAtBat();
   },
 
   logOffensiveOut: (outType, x, y) => {
@@ -826,12 +904,14 @@ export const useGameStore = create<GameState>()(
     let nextOuts = state.outs;
     let nextRuns = state.runsThisInning;
     let nextMode = state.mode;
+    let nextOpponentRunsInning = state.opponentRunsThisInning;
 
     if (result === 'Out') {
       nextOuts++;
       if (nextOuts >= 3) {
         nextOuts = 0;
         nextRuns = 0;
+        nextOpponentRunsInning = 0;
         nextMode = 'offense';
       }
     }
@@ -856,6 +936,7 @@ export const useGameStore = create<GameState>()(
       outs: nextOuts,
       inning: nextInning,
       runsThisInning: nextRuns,
+      opponentRunsThisInning: nextOpponentRunsInning,
       mode: nextMode,
       defensiveActions: [...state.defensiveActions, { position, playerId, result }],
       inningLog: newLog,
@@ -888,6 +969,36 @@ export const useGameStore = create<GameState>()(
       inning: nextInning,
       outs: nextOuts,
       mode: nextMode,
+    });
+  },
+
+  scoreOpponentRun: () => {
+    const state = get();
+    const newPast = pushUndo(state);
+    const nextOpponentRunsInning = state.opponentRunsThisInning + 1;
+    const nextOpponentRunsTotal = state.opponentRunsTotal + 1;
+
+    // If opponent hits 5 runs, auto-switch to offense
+    if (nextOpponentRunsInning >= 5) {
+      const nextInning = Math.max(state.inning, computeNextInning(state.inningLog));
+      set({
+        pastStates: newPast,
+        opponentRunsThisInning: 0,
+        opponentRunsTotal: nextOpponentRunsTotal,
+        mode: 'offense',
+        inning: nextInning,
+        outs: 0,
+        runsThisInning: 0,
+        bases: { first: null, second: null, third: null },
+      });
+      get().startNextAtBat();
+      return;
+    }
+
+    set({
+      pastStates: newPast,
+      opponentRunsThisInning: nextOpponentRunsInning,
+      opponentRunsTotal: nextOpponentRunsTotal,
     });
   },
 
@@ -931,6 +1042,7 @@ export const useGameStore = create<GameState>()(
       mode: 'defense',
       outs: 0,
       runsThisInning: 0,
+      opponentRunsThisInning: 0,
       bases: { first: null, second: null, third: null },
     });
   },
@@ -945,6 +1057,7 @@ export const useGameStore = create<GameState>()(
       inning: nextInning,
       outs: 0,
       runsThisInning: 0,
+      opponentRunsThisInning: 0,
       bases: { first: null, second: null, third: null },
     });
     get().startNextAtBat();
@@ -980,6 +1093,7 @@ export const useGameStore = create<GameState>()(
       opponent: opponentName || 'Unknown Opponent',
       runsScored: state.runsTotal,
       opponentScore,
+      opponentRunsTotal: state.opponentRunsTotal,
       atBats: state.atBats,
       defensiveActions: state.defensiveActions,
       inningLog: state.inningLog,
@@ -989,7 +1103,7 @@ export const useGameStore = create<GameState>()(
     set({
       gameHistory: [...state.gameHistory, newGame],
       gameStarted: false, mode: 'lineup', inning: 1, outs: 0,
-      runsThisInning: 0, runsTotal: 0,
+      runsThisInning: 0, runsTotal: 0, opponentRunsThisInning: 0, opponentRunsTotal: 0,
       bases: { first: null, second: null, third: null },
       lineup: [], currentBatterIndex: 0, currentAtBat: null, isLineupSet: false,
       atBats: [], defensiveAssignments: {}, defensiveActions: [],
@@ -1081,6 +1195,7 @@ export const useGameStore = create<GameState>()(
     set({
       gameStarted: true, mode: 'dashboard', inning: 6, outs: 0,
       runsThisInning: 0, runsTotal: mockRunsTotal,
+      opponentRunsThisInning: 0, opponentRunsTotal: 0,
       bases: { first: null, second: null, third: null },
       roster: mockRoster, lineup, currentBatterIndex: batterIndex,
       currentAtBat: null, atBats: mockAtBats,
