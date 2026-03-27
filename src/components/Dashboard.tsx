@@ -108,7 +108,7 @@ function countPitchTypes(abs: AtBatState[]): { takes: number; total: number } {
 type ViewTab = 'stats' | 'log' | 'season' | 'history';
 
 export default function Dashboard() {
-  const { roster, atBats, gameStarted, endAndSaveGame, gameHistory, inningLog, deleteHistoricalGame, updateInningLogEntries, toggleGameExclusion } = useGameStore();
+  const { roster, atBats, gameStarted, endAndSaveGame, gameHistory, inningLog, deleteHistoricalGame, updateInningLogEntries, toggleGameExclusion, opponentRunsTotal, runsTotal, updateHistoricalGameScore, updateInningLogEntry, updateHistoricalInningLogEntry } = useGameStore();
 
   const coachView = isCoachView();
   const [activeTab, setActiveTab] = useState<ViewTab>(coachView ? 'season' : 'stats');
@@ -126,6 +126,18 @@ export default function Dashboard() {
   const [selectedHistoryGame, setSelectedHistoryGame] = useState<HistoricalGame | null>(null);
   const [historyDetailTab, setHistoryDetailTab] = useState<'log' | 'stats'>('log');
   const [historySprayBatter, setHistorySprayBatter] = useState('');
+  const [editingScore, setEditingScore] = useState(false);
+  const [editOpponent, setEditOpponent] = useState('');
+  const [editOurScore, setEditOurScore] = useState('');
+  const [editTheirScore, setEditTheirScore] = useState('');
+
+  // Editing individual log entries (index for current game, or {gameId, index} for historical)
+  const [editingLogEntry, setEditingLogEntry] = useState<{ index: number; gameId?: string } | null>(null);
+  const [editLogBatterId, setEditLogBatterId] = useState('');
+  const [editLogBatterName, setEditLogBatterName] = useState('');
+  const [editLogResult, setEditLogResult] = useState('');
+  const [editLogRbis, setEditLogRbis] = useState('0');
+  const [editLogDetails, setEditLogDetails] = useState('');
 
   // Game log editing
   const [editingGroupKey, setEditingGroupKey] = useState<string | null>(null);
@@ -256,7 +268,7 @@ export default function Dashboard() {
         <>
           {gameStarted && !coachView && (
             !endGameMode ? (
-              <button className="huge-btn btn-danger w-full" onClick={() => setEndGameMode(true)} style={{ height: '40px', fontSize: '0.875rem' }}>
+              <button className="huge-btn btn-danger w-full" onClick={() => { setEndGameMode(true); setOpponentScore(String(opponentRunsTotal)); }} style={{ height: '40px', fontSize: '0.875rem' }}>
                 End & Save Game
               </button>
             ) : (
@@ -267,8 +279,18 @@ export default function Dashboard() {
                     placeholder="Opponent name" autoFocus
                     style={{ flex: 1, padding: '12px', borderRadius: '8px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '1rem' }} />
                 </div>
+                <div style={{ backgroundColor: '#1a2a3a', borderRadius: '8px', padding: '10px', fontSize: '0.8rem' }}>
+                  <div className="flex-row justify-between items-center" style={{ marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Dodgers scored:</span>
+                    <span style={{ color: '#4caf50', fontWeight: 'bold', fontSize: '1rem' }}>{runsTotal}</span>
+                  </div>
+                  <div className="flex-row justify-between items-center">
+                    <span style={{ color: 'var(--text-secondary)' }}>Opponent scored (tracked):</span>
+                    <span style={{ color: '#ff9800', fontWeight: 'bold', fontSize: '1rem' }}>{opponentRunsTotal}</span>
+                  </div>
+                </div>
                 <div className="flex-row gap-sm items-center">
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Their final score:</span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Confirm their score:</span>
                   <input type="number" min="0" value={opponentScore} onChange={e => setOpponentScore(e.target.value)}
                     placeholder="0"
                     style={{ width: '72px', padding: '10px', borderRadius: '8px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '1rem', textAlign: 'center' }} />
@@ -376,23 +398,79 @@ export default function Dashboard() {
                         </div>
                       )}
                     </div>
-                    {group.entries.map((entry, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '4px 8px 4px 16px', fontSize: '0.8rem', borderBottom: '1px solid #1a1a1a' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span>
-                            <span style={{ fontWeight: 'bold' }}>{entry.batterName}</span>{' '}
-                            <span style={{ color: entry.result.includes('Out') || entry.result === 'Strikeout' || entry.result === 'Flyout' || entry.result === 'Groundout' || entry.result === 'Forceout' || entry.result === 'Tagout' ? '#ef5350' : entry.result === '1B' || entry.result === '2B' || entry.result === '3B' || entry.result === 'HR' ? '#4caf50' : 'var(--text-secondary)' }}>
-                              {entry.result}
+                    {group.entries.map((entry, i) => {
+                      const logIdx = group.indices[i];
+                      const isEditingThis = editingLogEntry?.index === logIdx && !editingLogEntry?.gameId;
+                      return isEditingThis ? (
+                        <div key={i} style={{ padding: '8px 8px 8px 16px', fontSize: '0.8rem', borderBottom: '1px solid #1a1a1a', backgroundColor: '#1a2a1a' }}>
+                          <div className="flex-col" style={{ gap: '6px' }}>
+                            <div className="flex-row gap-sm items-center">
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>Batter:</span>
+                              <select value={editLogBatterId} onChange={e => { setEditLogBatterId(e.target.value); const p = roster.find(r => r.id === e.target.value); if (p) setEditLogBatterName(p.name); }}
+                                style={{ flex: 1, padding: '6px', borderRadius: '6px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '0.8rem' }}>
+                                <option value="">— none —</option>
+                                {roster.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                            </div>
+                            <div className="flex-row gap-sm items-center">
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>Result:</span>
+                              <select value={editLogResult} onChange={e => setEditLogResult(e.target.value)}
+                                style={{ flex: 1, padding: '6px', borderRadius: '6px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '0.8rem' }}>
+                                {['1B', '2B', '3B', 'HR', 'Groundout', 'Flyout', 'Strikeout', 'Forceout', 'Tagout', 'ROE', 'FC', 'SAC', 'BB', 'HBP'].map(r => <option key={r} value={r}>{r}</option>)}
+                                {!['1B', '2B', '3B', 'HR', 'Groundout', 'Flyout', 'Strikeout', 'Forceout', 'Tagout', 'ROE', 'FC', 'SAC', 'BB', 'HBP'].includes(editLogResult) && editLogResult && <option value={editLogResult}>{editLogResult}</option>}
+                              </select>
+                            </div>
+                            <div className="flex-row gap-sm items-center">
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>RBIs:</span>
+                              <div className="flex-row items-center" style={{ gap: '8px' }}>
+                                <button onClick={() => setEditLogRbis(String(Math.max(0, parseInt(editLogRbis) - 1)))}
+                                  style={{ background: '#333', border: 'none', color: 'white', borderRadius: '4px', width: '28px', height: '28px', cursor: 'pointer', fontSize: '1rem' }}>−</button>
+                                <span style={{ fontSize: '1rem', fontWeight: 'bold', minWidth: '16px', textAlign: 'center' }}>{editLogRbis}</span>
+                                <button onClick={() => setEditLogRbis(String(parseInt(editLogRbis) + 1))}
+                                  style={{ background: '#333', border: 'none', color: 'white', borderRadius: '4px', width: '28px', height: '28px', cursor: 'pointer', fontSize: '1rem' }}>+</button>
+                              </div>
+                            </div>
+                            <div className="flex-row gap-sm items-center">
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>Details:</span>
+                              <input type="text" value={editLogDetails} onChange={e => setEditLogDetails(e.target.value)}
+                                placeholder="e.g. Caleb scored · Swain → 2nd"
+                                style={{ flex: 1, padding: '6px', borderRadius: '6px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '0.75rem' }} />
+                            </div>
+                            <div className="flex-row gap-sm" style={{ marginTop: '4px' }}>
+                              <button className="huge-btn btn-primary flex-1" style={{ height: '36px', fontSize: '0.8rem' }}
+                                onClick={() => {
+                                  updateInningLogEntry(logIdx, {
+                                    ...(editLogBatterId && { batterId: editLogBatterId, batterName: editLogBatterName }),
+                                    result: editLogResult,
+                                    rbis: parseInt(editLogRbis) || 0,
+                                    details: editLogDetails ? editLogDetails.split('·').map(d => d.trim()).filter(Boolean) : [],
+                                  });
+                                  setEditingLogEntry(null);
+                                }}>Save</button>
+                              <button className="huge-btn btn-secondary" style={{ height: '36px', fontSize: '0.8rem', padding: '0 12px' }}
+                                onClick={() => setEditingLogEntry(null)}>Cancel</button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '4px 8px 4px 16px', fontSize: '0.8rem', borderBottom: '1px solid #1a1a1a', cursor: coachView ? 'default' : 'pointer' }}
+                          onClick={() => { if (coachView) return; setEditingLogEntry({ index: logIdx }); setEditLogBatterId(entry.batterId ?? ''); setEditLogBatterName(entry.batterName ?? ''); setEditLogResult(entry.result); setEditLogRbis(String(entry.rbis)); setEditLogDetails(entry.details.join(' · ')); }}>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span>
+                              <span style={{ fontWeight: 'bold' }}>{entry.batterName}</span>{' '}
+                              <span style={{ color: entry.result.includes('Out') || entry.result === 'Strikeout' || entry.result === 'Flyout' || entry.result === 'Groundout' || entry.result === 'Forceout' || entry.result === 'Tagout' ? '#ef5350' : entry.result === '1B' || entry.result === '2B' || entry.result === '3B' || entry.result === 'HR' ? '#4caf50' : 'var(--text-secondary)' }}>
+                                {entry.result}
+                              </span>
                             </span>
-                          </span>
-                          {entry.details.length > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: '8px' }}>{entry.details.join(' · ')}</span>}
+                            {entry.details.length > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: '8px' }}>{entry.details.join(' · ')}</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                            {entry.rbis > 0 && <span style={{ fontSize: '0.65rem', backgroundColor: '#4caf50', color: 'white', padding: '1px 4px', borderRadius: '4px' }}>{entry.rbis} RBI</span>}
+                            <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{entry.outsAfter}/3 out</span>
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
-                          {entry.rbis > 0 && <span style={{ fontSize: '0.65rem', backgroundColor: '#4caf50', color: 'white', padding: '1px 4px', borderRadius: '4px' }}>{entry.rbis} RBI</span>}
-                          <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{entry.outsAfter}/3 out</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -530,13 +608,13 @@ export default function Dashboard() {
       {activeTab === 'history' && selectedHistoryGame && (() => {
         const g = selectedHistoryGame;
 
-        // Group log
-        const gLog: { key: string; inning: number; isOffense: boolean; entries: InningLogEntry[] }[] = [];
+        // Group log (with indices for editing)
+        const gLog: { key: string; inning: number; isOffense: boolean; entries: InningLogEntry[]; indices: number[] }[] = [];
         let curKey = '';
-        (g.inningLog ?? []).forEach(entry => {
+        (g.inningLog ?? []).forEach((entry, idx) => {
           const key = `${entry.inning}-${entry.isOffense}`;
-          if (key !== curKey) { gLog.push({ key, inning: entry.inning, isOffense: entry.isOffense, entries: [entry] }); curKey = key; }
-          else gLog[gLog.length - 1].entries.push(entry);
+          if (key !== curKey) { gLog.push({ key, inning: entry.inning, isOffense: entry.isOffense, entries: [entry], indices: [idx] }); curKey = key; }
+          else { gLog[gLog.length - 1].entries.push(entry); gLog[gLog.length - 1].indices.push(idx); }
         });
 
         // Batting stats
@@ -562,7 +640,7 @@ export default function Dashboard() {
         return (
           <section>
             <div className="flex-row items-center" style={{ gap: '10px', marginBottom: '12px' }}>
-              <button onClick={() => setSelectedHistoryGame(null)}
+              <button onClick={() => { setSelectedHistoryGame(null); setEditingScore(false); }}
                 style={{ background: 'none', border: '1px solid #444', color: 'white', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontSize: '0.875rem' }}>
                 ← Back
               </button>
@@ -570,7 +648,58 @@ export default function Dashboard() {
                 <span style={{ fontWeight: 'bold', fontSize: '1rem' }}>vs. {g.opponent}</span>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(g.date).toLocaleDateString()} · {g.runsScored}–{g.opponentScore}</span>
               </div>
+              {!coachView && !editingScore && (
+                <button onClick={() => { setEditingScore(true); setEditOpponent(g.opponent); setEditOurScore(String(g.runsScored)); setEditTheirScore(String(g.opponentScore)); }}
+                  style={{ background: 'none', border: '1px solid #444', color: 'var(--text-secondary)', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontSize: '0.75rem' }}>
+                  Edit
+                </button>
+              )}
             </div>
+
+            {editingScore && (
+              <div className="flex-col gap-sm" style={{ backgroundColor: 'var(--bg-card)', padding: '12px', borderRadius: '12px', marginBottom: '12px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Edit game info:</span>
+                <input type="text" value={editOpponent} onChange={e => setEditOpponent(e.target.value)}
+                  placeholder="Opponent name"
+                  style={{ padding: '10px', borderRadius: '8px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '1rem' }} />
+                <div className="flex-row gap-sm items-center">
+                  <div className="flex-col items-center" style={{ flex: 1 }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Dodgers</span>
+                    <input type="number" min="0" value={editOurScore} onChange={e => setEditOurScore(e.target.value)}
+                      style={{ width: '100%', padding: '10px', borderRadius: '8px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '1.1rem', textAlign: 'center' }} />
+                  </div>
+                  <span style={{ fontSize: '1.2rem', color: 'var(--text-secondary)', paddingTop: '16px' }}>–</span>
+                  <div className="flex-col items-center" style={{ flex: 1 }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Opponent</span>
+                    <input type="number" min="0" value={editTheirScore} onChange={e => setEditTheirScore(e.target.value)}
+                      style={{ width: '100%', padding: '10px', borderRadius: '8px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '1.1rem', textAlign: 'center' }} />
+                  </div>
+                </div>
+                <div className="flex-row gap-sm">
+                  <button className="huge-btn btn-primary flex-1" style={{ height: '44px', fontSize: '0.875rem' }}
+                    onClick={() => {
+                      const updates: { opponent?: string; runsScored?: number; opponentScore?: number } = {};
+                      if (editOpponent.trim() && editOpponent.trim() !== g.opponent) updates.opponent = editOpponent.trim();
+                      const newOur = parseInt(editOurScore);
+                      const newTheir = parseInt(editTheirScore);
+                      if (!isNaN(newOur) && newOur !== g.runsScored) updates.runsScored = newOur;
+                      if (!isNaN(newTheir) && newTheir !== g.opponentScore) updates.opponentScore = newTheir;
+                      if (Object.keys(updates).length > 0) {
+                        updateHistoricalGameScore(g.id, updates);
+                        // Update local selected game reference
+                        setSelectedHistoryGame({ ...g, ...updates.opponent !== undefined ? { opponent: updates.opponent } : {}, ...updates.runsScored !== undefined ? { runsScored: updates.runsScored } : {}, ...updates.opponentScore !== undefined ? { opponentScore: updates.opponentScore } : {} });
+                      }
+                      setEditingScore(false);
+                    }}>
+                    Save Changes
+                  </button>
+                  <button className="huge-btn btn-secondary" style={{ height: '44px', padding: '0 16px', fontSize: '0.875rem' }}
+                    onClick={() => setEditingScore(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="flex-row" style={{ backgroundColor: 'var(--bg-card)', borderRadius: '10px', padding: '3px', gap: '3px', marginBottom: '12px' }}>
               {(['log', 'stats'] as const).map(t => (
@@ -593,23 +722,85 @@ export default function Dashboard() {
                       <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: group.isOffense ? '#4caf50' : '#2196f3', padding: '4px 8px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '6px', marginBottom: '4px', borderLeft: `3px solid ${group.isOffense ? '#4caf50' : '#2196f3'}` }}>
                         Inning {group.inning} — {group.isOffense ? 'Offense' : 'Defense'}
                       </div>
-                      {group.entries.map((entry, i) => (
-                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '4px 8px 4px 16px', fontSize: '0.8rem', borderBottom: '1px solid #1a1a1a' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <span>
-                              <span style={{ fontWeight: 'bold' }}>{entry.batterName}</span>{' '}
-                              <span style={{ color: ['Out', 'Strikeout', 'Flyout', 'Groundout', 'Forceout', 'Tagout'].some(x => entry.result.includes(x)) ? '#ef5350' : ['1B', '2B', '3B', 'HR'].includes(entry.result) ? '#4caf50' : 'var(--text-secondary)' }}>
-                                {entry.result}
+                      {group.entries.map((entry, i) => {
+                        const logIdx = group.indices[i];
+                        const isEditingThis = editingLogEntry?.index === logIdx && editingLogEntry?.gameId === g.id;
+                        return isEditingThis ? (
+                          <div key={i} style={{ padding: '8px 8px 8px 16px', fontSize: '0.8rem', borderBottom: '1px solid #1a1a1a', backgroundColor: '#1a2a1a' }}>
+                            <div className="flex-col" style={{ gap: '6px' }}>
+                              <div className="flex-row gap-sm items-center">
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>Batter:</span>
+                                <select value={editLogBatterId} onChange={e => { setEditLogBatterId(e.target.value); const p = [...roster, ...historyPlayers].find(r => r.id === e.target.value); if (p) setEditLogBatterName(p.name); }}
+                                  style={{ flex: 1, padding: '6px', borderRadius: '6px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '0.8rem' }}>
+                                  <option value="">— none —</option>
+                                  {historyPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                  {roster.filter(p => !historyPlayers.some(hp => hp.id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name} (roster)</option>)}
+                                </select>
+                              </div>
+                              <div className="flex-row gap-sm items-center">
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>Result:</span>
+                                <select value={editLogResult} onChange={e => setEditLogResult(e.target.value)}
+                                  style={{ flex: 1, padding: '6px', borderRadius: '6px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '0.8rem' }}>
+                                  {['1B', '2B', '3B', 'HR', 'Groundout', 'Flyout', 'Strikeout', 'Forceout', 'Tagout', 'ROE', 'FC', 'SAC', 'BB', 'HBP'].map(r => <option key={r} value={r}>{r}</option>)}
+                                  {!['1B', '2B', '3B', 'HR', 'Groundout', 'Flyout', 'Strikeout', 'Forceout', 'Tagout', 'ROE', 'FC', 'SAC', 'BB', 'HBP'].includes(editLogResult) && editLogResult && <option value={editLogResult}>{editLogResult}</option>}
+                                </select>
+                              </div>
+                              <div className="flex-row gap-sm items-center">
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>RBIs:</span>
+                                <div className="flex-row items-center" style={{ gap: '8px' }}>
+                                  <button onClick={() => setEditLogRbis(String(Math.max(0, parseInt(editLogRbis) - 1)))}
+                                    style={{ background: '#333', border: 'none', color: 'white', borderRadius: '4px', width: '28px', height: '28px', cursor: 'pointer', fontSize: '1rem' }}>−</button>
+                                  <span style={{ fontSize: '1rem', fontWeight: 'bold', minWidth: '16px', textAlign: 'center' }}>{editLogRbis}</span>
+                                  <button onClick={() => setEditLogRbis(String(parseInt(editLogRbis) + 1))}
+                                    style={{ background: '#333', border: 'none', color: 'white', borderRadius: '4px', width: '28px', height: '28px', cursor: 'pointer', fontSize: '1rem' }}>+</button>
+                                </div>
+                              </div>
+                              <div className="flex-row gap-sm items-center">
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '50px' }}>Details:</span>
+                                <input type="text" value={editLogDetails} onChange={e => setEditLogDetails(e.target.value)}
+                                  placeholder="e.g. Caleb scored · Swain → 2nd"
+                                  style={{ flex: 1, padding: '6px', borderRadius: '6px', backgroundColor: 'var(--bg-dark)', color: 'white', border: '1px solid #444', fontSize: '0.75rem' }} />
+                              </div>
+                              <div className="flex-row gap-sm" style={{ marginTop: '4px' }}>
+                                <button className="huge-btn btn-primary flex-1" style={{ height: '36px', fontSize: '0.8rem' }}
+                                  onClick={() => {
+                                    const updates: Partial<InningLogEntry> = {
+                                      result: editLogResult,
+                                      rbis: parseInt(editLogRbis) || 0,
+                                      details: editLogDetails ? editLogDetails.split('·').map(d => d.trim()).filter(Boolean) : [],
+                                    };
+                                    if (editLogBatterId) { updates.batterId = editLogBatterId; updates.batterName = editLogBatterName; }
+                                    updateHistoricalInningLogEntry(g.id, logIdx, updates);
+                                    // Update local selected game reference
+                                    const newLog = [...(g.inningLog ?? [])];
+                                    newLog[logIdx] = { ...newLog[logIdx], ...updates };
+                                    setSelectedHistoryGame({ ...g, inningLog: newLog });
+                                    setEditingLogEntry(null);
+                                  }}>Save</button>
+                                <button className="huge-btn btn-secondary" style={{ height: '36px', fontSize: '0.8rem', padding: '0 12px' }}
+                                  onClick={() => setEditingLogEntry(null)}>Cancel</button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '4px 8px 4px 16px', fontSize: '0.8rem', borderBottom: '1px solid #1a1a1a', cursor: coachView ? 'default' : 'pointer' }}
+                            onClick={() => { if (coachView) return; setEditingLogEntry({ index: logIdx, gameId: g.id }); setEditLogBatterId(entry.batterId ?? ''); setEditLogBatterName(entry.batterName ?? ''); setEditLogResult(entry.result); setEditLogRbis(String(entry.rbis)); setEditLogDetails(entry.details.join(' · ')); }}>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span>
+                                <span style={{ fontWeight: 'bold' }}>{entry.batterName}</span>{' '}
+                                <span style={{ color: ['Out', 'Strikeout', 'Flyout', 'Groundout', 'Forceout', 'Tagout'].some(x => entry.result.includes(x)) ? '#ef5350' : ['1B', '2B', '3B', 'HR'].includes(entry.result) ? '#4caf50' : 'var(--text-secondary)' }}>
+                                  {entry.result}
+                                </span>
                               </span>
-                            </span>
-                            {entry.details.length > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: '8px' }}>{entry.details.join(' · ')}</span>}
+                              {entry.details.length > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: '8px' }}>{entry.details.join(' · ')}</span>}
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                              {entry.rbis > 0 && <span style={{ fontSize: '0.65rem', backgroundColor: '#4caf50', color: 'white', padding: '1px 4px', borderRadius: '4px' }}>{entry.rbis} RBI</span>}
+                              <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{entry.outsAfter}/3 out</span>
+                            </div>
                           </div>
-                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
-                            {entry.rbis > 0 && <span style={{ fontSize: '0.65rem', backgroundColor: '#4caf50', color: 'white', padding: '1px 4px', borderRadius: '4px' }}>{entry.rbis} RBI</span>}
-                            <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{entry.outsAfter}/3 out</span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ))}
                 </div>

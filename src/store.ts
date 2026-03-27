@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import {
   upsertPlayer, deletePlayer as deletePlayerFromDb,
-  saveGameToSupabase, deleteGameFromSupabase, toggleGameExclusionInSupabase,
+  saveGameToSupabase, deleteGameFromSupabase, toggleGameExclusionInSupabase, updateGameScoreInSupabase, updateInningLogInSupabase,
 } from './supabaseSync';
 
 export type Player = { id: string; name: string };
@@ -149,6 +149,9 @@ export interface GameState {
   scoreOpponentRun: () => void;
   endAndSaveGame: (opponentName: string, opponentScore: number) => void;
   toggleGameExclusion: (id: string) => void;
+  updateHistoricalGameScore: (id: string, fields: { opponent?: string; runsScored?: number; opponentScore?: number }) => void;
+  updateInningLogEntry: (index: number, fields: Partial<InningLogEntry>) => void;
+  updateHistoricalInningLogEntry: (gameId: string, entryIndex: number, fields: Partial<InningLogEntry>) => void;
 }
 
 const initialState = {
@@ -187,7 +190,8 @@ const functionKeys: (keyof GameState)[] = [
   'scoreRun', 'scoreOpponentRun', 'endAndSaveGame', 'manualNextInning', 'manualSwitchToDefense',
   'manualSwitchToOffense', 'injectMockGame', 'deleteHistoricalGame', 'pastStates',
   'setManualInning', 'setCurrentBatterIndex', 'setLineupSet', 'pushToLineup',
-  'addLateJoinerToLineup', 'updateInningLogEntries', 'toggleGameExclusion'
+  'addLateJoinerToLineup', 'updateInningLogEntries', 'toggleGameExclusion', 'updateHistoricalGameScore',
+  'updateInningLogEntry', 'updateHistoricalInningLogEntry'
 ];
 
 const serializeState = (state: GameState): string => {
@@ -332,12 +336,16 @@ export const useGameStore = create<GameState>()(
   },
 
   startNextAtBat: () => {
-    const { lineup, currentBatterIndex, inning, isLineupSet } = get();
+    const { lineup, currentBatterIndex, inning } = get();
     let nextBatterId = '';
-    
+
     if (lineup.length > 0) {
-      if (isLineupSet || currentBatterIndex < lineup.length) {
-        nextBatterId = lineup[currentBatterIndex];
+      // Clamp index to valid range to prevent out-of-bounds lookups
+      const safeIndex = currentBatterIndex % Math.max(1, lineup.length);
+      nextBatterId = lineup[safeIndex] ?? '';
+      // If the index was out of bounds, correct it in state
+      if (safeIndex !== currentBatterIndex) {
+        set({ currentBatterIndex: safeIndex });
       }
     }
     
@@ -392,7 +400,7 @@ export const useGameStore = create<GameState>()(
       const newPast = pushUndo(state);
       const { lineup, currentBatterIndex, atBats, currentAtBat, bases } = state;
       const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
-      const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+      const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
       
       const completedAtBat = {
         ...currentAtBat,
@@ -456,7 +464,7 @@ export const useGameStore = create<GameState>()(
       const newPast = pushUndo(state);
       const { lineup, currentBatterIndex, atBats, currentAtBat } = state;
       const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
-      const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+      const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
       const completedAtBat = {
         ...currentAtBat,
         events: [...currentAtBat.events, { type: 'hit' as const, hitType, trajectory, x, y }]
@@ -536,7 +544,7 @@ export const useGameStore = create<GameState>()(
     const newPast = pushUndo(state);
     const { lineup, currentBatterIndex, atBats, currentAtBat } = state;
     const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
-    const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+    const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
 
     const isError = pending.hitType === 'error';
     const isForceout = pending.hitType === 'forceout';
@@ -705,7 +713,7 @@ export const useGameStore = create<GameState>()(
       };
       const { lineup, currentBatterIndex } = state;
       const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, state.currentAtBat.batterId);
-      const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+      const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
 
       const logEntry: InningLogEntry = {
         inning: state.inning, isOffense: true, batterId: state.currentAtBat.batterId,
@@ -753,7 +761,7 @@ export const useGameStore = create<GameState>()(
       };
       const { lineup, currentBatterIndex } = state;
       const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, state.currentAtBat.batterId);
-      const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+      const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
 
       const logEntry: InningLogEntry = {
         inning: state.inning, isOffense: true, batterId: state.currentAtBat.batterId,
@@ -810,7 +818,7 @@ export const useGameStore = create<GameState>()(
 
     const { lineup, currentBatterIndex, atBats, currentAtBat } = state;
     const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
-    const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+    const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
 
     const completedAtBat = {
       ...currentAtBat,
@@ -879,7 +887,7 @@ export const useGameStore = create<GameState>()(
     const newPast = pushUndo(state);
     const { lineup, currentBatterIndex, atBats, currentAtBat } = state;
     const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
-    const nextIndex = newIsLineupSet ? (currentBatterIndex + 1) % Math.max(1, lineup.length) : lineup.length;
+    const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
 
     const completedAtBat = {
       ...currentAtBat,
@@ -1085,12 +1093,49 @@ export const useGameStore = create<GameState>()(
     return { gameHistory: state.gameHistory.map(g => g.id === id ? { ...g, excluded: newExcluded } : g) };
   }),
 
+  updateHistoricalGameScore: (id, fields) => set((state) => {
+    // Fire-and-forget sync to Supabase
+    updateGameScoreInSupabase(id, fields);
+    return {
+      gameHistory: state.gameHistory.map(g =>
+        g.id === id ? {
+          ...g,
+          ...(fields.opponent !== undefined && { opponent: fields.opponent }),
+          ...(fields.runsScored !== undefined && { runsScored: fields.runsScored }),
+          ...(fields.opponentScore !== undefined && { opponentScore: fields.opponentScore }),
+        } : g
+      ),
+    };
+  }),
+
   updateInningLogEntries: (indices, newInning) => set((state) => {
     const newLog = [...state.inningLog];
     indices.forEach(i => {
       if (i >= 0 && i < newLog.length) newLog[i] = { ...newLog[i], inning: newInning };
     });
     return { inningLog: newLog, inning: Math.max(state.inning, computeNextInning(newLog)) };
+  }),
+
+  updateInningLogEntry: (index, fields) => set((state) => {
+    const newLog = [...state.inningLog];
+    if (index >= 0 && index < newLog.length) {
+      newLog[index] = { ...newLog[index], ...fields };
+    }
+    return { inningLog: newLog };
+  }),
+
+  updateHistoricalInningLogEntry: (gameId, entryIndex, fields) => set((state) => {
+    const newHistory = state.gameHistory.map(g => {
+      if (g.id !== gameId) return g;
+      const newLog = [...(g.inningLog ?? [])];
+      if (entryIndex >= 0 && entryIndex < newLog.length) {
+        newLog[entryIndex] = { ...newLog[entryIndex], ...fields };
+      }
+      // Fire-and-forget sync to Supabase
+      updateInningLogInSupabase(gameId, newLog);
+      return { ...g, inningLog: newLog };
+    });
+    return { gameHistory: newHistory };
   }),
 
   endAndSaveGame: (opponentName, opponentScore) => {

@@ -263,6 +263,54 @@ export async function deleteGameFromSupabase(id: string): Promise<void> {
   if (error) console.error('Failed to delete game:', error.message);
 }
 
+export async function updateInningLogInSupabase(gameId: string, inningLog: InningLogEntry[]): Promise<void> {
+  // Delete all existing log entries for this game, then re-insert
+  const { error: delError } = await supabase
+    .from('inning_log')
+    .delete()
+    .eq('game_id', gameId);
+
+  if (delError) {
+    console.error('Failed to delete inning log for update:', delError.message);
+    return;
+  }
+
+  if (inningLog.length > 0) {
+    const logRows = inningLog.map((entry: InningLogEntry, i: number) => ({
+      game_id: gameId,
+      inning: entry.inning,
+      is_offense: entry.isOffense,
+      batter_id: entry.batterId ?? null,
+      batter_name: entry.batterName ?? null,
+      result: entry.result,
+      details: entry.details,
+      rbis: entry.rbis,
+      outs_after: entry.outsAfter,
+      log_order: i,
+    }));
+
+    const { error: insError } = await supabase
+      .from('inning_log')
+      .insert(logRows);
+
+    if (insError) console.error('Failed to re-insert inning log:', insError.message);
+  }
+}
+
+export async function updateGameScoreInSupabase(id: string, fields: { opponent?: string; runsScored?: number; opponentScore?: number }): Promise<void> {
+  const updateObj: Record<string, unknown> = {};
+  if (fields.opponent !== undefined) updateObj.opponent = fields.opponent;
+  if (fields.runsScored !== undefined) updateObj.runs_scored = fields.runsScored;
+  if (fields.opponentScore !== undefined) updateObj.opponent_score = fields.opponentScore;
+
+  const { error } = await supabase
+    .from('games')
+    .update(updateObj)
+    .eq('id', id);
+
+  if (error) console.error('Failed to update game score:', error.message);
+}
+
 export async function toggleGameExclusionInSupabase(id: string, excluded: boolean): Promise<void> {
   const { error } = await supabase
     .from('games')
