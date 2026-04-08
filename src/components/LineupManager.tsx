@@ -4,7 +4,8 @@ import { useGameStore } from '../store';
 export default function LineupManager() {
   const [name, setName] = useState('');
   const { roster, addPlayerToRoster, removePlayerFromRoster, addToLineup, removeFromLineup,
-          lineup, gameStarted, setGameStarted, startNextAtBat, setMode } = useGameStore();
+          lineup, gameStarted, setGameStarted, startNextAtBat, setMode,
+          startingSide, setStartingSide } = useGameStore();
 
   const handleAddPlayer = (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,15 +98,45 @@ export default function LineupManager() {
         )}
       </div>
 
+      {roster.length > 0 && !gameStarted && (
+        <div className="flex-col gap-sm" style={{marginTop: '16px'}}>
+          <h2 style={{fontSize: '1rem', fontWeight: 'bold', color: 'var(--text-secondary)'}}>
+            Starting Side
+          </h2>
+          <div className="flex-row gap-sm">
+            <button
+              className={startingSide === 'offense' ? 'huge-btn btn-primary' : 'huge-btn btn-secondary'}
+              style={{flex: 1}}
+              onClick={() => setStartingSide('offense')}
+            >
+              Away (Bat 1st)
+            </button>
+            <button
+              className={startingSide === 'defense' ? 'huge-btn btn-primary' : 'huge-btn btn-secondary'}
+              style={{flex: 1}}
+              onClick={() => setStartingSide('defense')}
+            >
+              Home (Field 1st)
+            </button>
+          </div>
+        </div>
+      )}
+
       {roster.length > 0 && (
         <button
           className="huge-btn btn-primary w-full"
           onClick={() => {
             if (!gameStarted) {
               setGameStarted(true);
-              startNextAtBat();
+              if (startingSide === 'offense') {
+                startNextAtBat();
+                setMode('offense');
+              } else {
+                setMode('defense');
+              }
+            } else {
+              setMode(startingSide === 'offense' ? 'offense' : 'defense');
             }
-            setMode('offense');
           }}
           style={{marginTop: '24px'}}
         >

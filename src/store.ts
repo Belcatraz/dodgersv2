@@ -81,6 +81,7 @@ export type PendingForceOut = {
 export interface GameState {
   gameStarted: boolean;
   mode: 'offense' | 'defense' | 'dashboard' | 'lineup';
+  startingSide: 'offense' | 'defense';
   inning: number;
   outs: number;
   runsThisInning: number;
@@ -111,6 +112,7 @@ export interface GameState {
   undo: () => void;
   setGameStarted: (started: boolean) => void;
   setMode: (mode: 'offense' | 'defense' | 'dashboard' | 'lineup') => void;
+  setStartingSide: (side: 'offense' | 'defense') => void;
   assignDefensivePosition: (position: string, playerId: string | null) => void;
   addPlayerToRoster: (name: string) => void;
   removePlayerFromRoster: (id: string) => void;
@@ -157,6 +159,7 @@ export interface GameState {
 const initialState = {
   gameStarted: false,
   mode: 'lineup' as const,
+  startingSide: 'offense' as 'offense' | 'defense',
   inning: 1,
   outs: 0,
   runsThisInning: 0,
@@ -182,7 +185,7 @@ const initialState = {
 
 // Omit all function keys for serialization
 const functionKeys: (keyof GameState)[] = [
-  'undo', 'setGameStarted', 'setMode', 'assignDefensivePosition',
+  'undo', 'setGameStarted', 'setMode', 'setStartingSide', 'assignDefensivePosition',
   'addPlayerToRoster', 'removePlayerFromRoster', 'addToLineup', 'removeFromLineup',
   'reorderLineup', 'startNextAtBat', 'logPitch', 'initiateHit', 'resolveNextRunner',
   'finalizeHitResolution', 'initiateForceOut', 'resolveForceOut',
@@ -235,6 +238,20 @@ const computeNextInning = (inningLog: InningLogEntry[]): number => {
   return allInnings.length > 0 ? Math.max(...allInnings) : 1;
 };
 
+// Side-aware inning advancement. Called at the moment a half-inning ends.
+// endingHalf: which half just ended ('offense' or 'defense').
+// Rule: if we started on offense (away), our half-order is offense→defense, so the
+// inning ticks after defense ends. If we started on defense (home), half-order is
+// defense→offense, so the inning ticks after offense ends.
+const advanceInningIfNeeded = (
+  currentInning: number,
+  startingSide: 'offense' | 'defense',
+  endingHalf: 'offense' | 'defense'
+): number => {
+  const secondHalf = startingSide === 'offense' ? 'defense' : 'offense';
+  return endingHalf === secondHalf ? currentInning + 1 : currentInning;
+};
+
 const getPlayerName = (state: GameState, id: string | null): string => {
   if (!id) return 'Unknown';
   return state.roster.find(p => p.id === id)?.name || 'Unknown';
@@ -263,6 +280,7 @@ export const useGameStore = create<GameState>()(
     ...(gameStarted ? {} : { battedThisCycle: state.battedThisCycle }),
   })),
   setMode: (mode) => set({ mode }),
+  setStartingSide: (side) => set({ startingSide: side }),
 
   assignDefensivePosition: (position, playerId) =>
     set((state) => {
@@ -721,17 +739,19 @@ export const useGameStore = create<GameState>()(
         result: pending.outType, details, rbis: 0, outsAfter: nextOuts
       };
 
+      const newLog = [...state.inningLog, logEntry];
+      const nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'offense');
       set({
         pastStates: newPast,
         atBats: [...state.atBats, completedAtBat],
         currentAtBat: null,
         currentBatterIndex: nextIndex,
         outs: 0,
-        inning: state.inning,
+        inning: nextInning,
         runsThisInning: 0,
         bases: { first: null, second: null, third: null },
         mode: 'defense',
-        inningLog: [...state.inningLog, logEntry],
+        inningLog: newLog,
         pendingForceOut: null,
         battedThisCycle: newBatted,
         isLineupSet: newIsLineupSet,
@@ -840,17 +860,22 @@ export const useGameStore = create<GameState>()(
       newBases.third = null;
     }
 
+    const newLog = [...state.inningLog, logEntry];
+    const advancedInning = nextMode === 'defense'
+      ? advanceInningIfNeeded(nextInning, state.startingSide, 'offense')
+      : nextInning;
+
     set({
       pastStates: newPast,
       outs: nextOuts,
-      inning: nextInning,
+      inning: advancedInning,
       runsThisInning: nextRuns,
       atBats: [...atBats, completedAtBat],
       currentAtBat: null,
       currentBatterIndex: nextIndex,
       bases: newBases,
       mode: nextMode,
-      inningLog: [...state.inningLog, logEntry],
+      inningLog: newLog,
       battedThisCycle: newBatted,
       isLineupSet: newIsLineupSet,
     });
@@ -944,7 +969,7 @@ export const useGameStore = create<GameState>()(
     const newLog = [...state.inningLog, logEntry];
     // Advance inning when defense half-inning ends (3 outs)
     const nextInning = nextMode === 'offense'
-      ? Math.max(state.inning, computeNextInning(newLog))
+      ? advanceInningIfNeeded(state.inning, state.startingSide, 'defense')
       : state.inning;
 
     set({
@@ -968,7 +993,7 @@ export const useGameStore = create<GameState>()(
     const newPast = pushUndo(state);
     let nextRunsInning = state.runsThisInning + 1;
     const nextRunsTotal = state.runsTotal + 1;
-    const nextInning = state.inning;
+    let nextInning = state.inning;
     let nextOuts = state.outs;
     let nextMode = state.mode;
 
@@ -976,6 +1001,7 @@ export const useGameStore = create<GameState>()(
       nextMode = 'defense';
       nextRunsInning = 0;
       nextOuts = 0;
+      nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'offense');
     }
 
     set({
@@ -996,7 +1022,7 @@ export const useGameStore = create<GameState>()(
 
     // If opponent hits 5 runs, auto-switch to offense
     if (nextOpponentRunsInning >= 5) {
-      const nextInning = Math.max(state.inning, computeNextInning(state.inningLog));
+      const nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'defense');
       set({
         pastStates: newPast,
         opponentRunsThisInning: 0,
@@ -1053,9 +1079,11 @@ export const useGameStore = create<GameState>()(
   manualSwitchToDefense: () => {
     const state = get();
     const newPast = pushUndo(state);
+    const nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'offense');
     set({
       pastStates: newPast,
       mode: 'defense',
+      inning: nextInning,
       outs: 0,
       runsThisInning: 0,
       opponentRunsThisInning: 0,
@@ -1066,7 +1094,7 @@ export const useGameStore = create<GameState>()(
   manualSwitchToOffense: () => {
     const state = get();
     const newPast = pushUndo(state);
-    const nextInning = Math.max(state.inning, computeNextInning(state.inningLog));
+    const nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'defense');
     set({
       pastStates: newPast,
       mode: 'offense',
