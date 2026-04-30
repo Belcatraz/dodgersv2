@@ -68,6 +68,8 @@ export type PendingRunnerResolution = {
   currentRunnerIndex: number;
   batterPlaced: boolean;  // has batter been placed on base yet
   skipOutCount?: boolean;  // for forceout: don't count another out
+  batterStep?: boolean;  // currently resolving the batter (after all runners done)
+  batterFinalBase?: 'first' | 'second' | 'third' | 'scored' | 'out';  // chosen outcome for the batter
 };
 
 export type PendingForceOut = {
@@ -129,6 +131,7 @@ export interface GameState {
   // New: initiates baserunner resolution instead of auto-completing
   initiateHit: (hitType: HitType, trajectory: HitTrajectory, x: number, y: number) => void;
   resolveNextRunner: (toBase: 'scored' | 'third' | 'second' | 'first' | 'out') => void;
+  resolveBatter: (outcome: 'first' | 'second' | 'third' | 'scored' | 'out') => void;
   finalizeHitResolution: () => void;
 
   // Force out flow
@@ -188,7 +191,7 @@ const functionKeys: (keyof GameState)[] = [
   'undo', 'setGameStarted', 'setMode', 'setStartingSide', 'assignDefensivePosition',
   'addPlayerToRoster', 'removePlayerFromRoster', 'addToLineup', 'removeFromLineup',
   'reorderLineup', 'startNextAtBat', 'logPitch', 'initiateHit', 'resolveNextRunner',
-  'finalizeHitResolution', 'initiateForceOut', 'resolveForceOut',
+  'resolveBatter', 'finalizeHitResolution', 'initiateForceOut', 'resolveForceOut',
   'logOffensiveOut', 'logOffensiveError', 'logDefensiveAction',
   'scoreRun', 'scoreOpponentRun', 'endAndSaveGame', 'manualNextInning', 'manualSwitchToDefense',
   'manualSwitchToOffense', 'injectMockGame', 'deleteHistoricalGame', 'pastStates',
@@ -513,8 +516,11 @@ export const useGameStore = create<GameState>()(
       return;
     }
 
-    // Has runners — enter resolution mode
+    // Has runners — enter resolution mode.
+    // pushUndo here (at start of play) so undo restores the pristine "batter up" state.
+    const newPast = pushUndo(state);
     set({
+      pastStates: newPast,
       pendingRunnerResolution: {
         batterId: state.currentAtBat.batterId,
         hitType, trajectory, x, y,
@@ -539,14 +545,22 @@ export const useGameStore = create<GameState>()(
     }];
 
     const nextIndex = pending.currentRunnerIndex + 1;
-    
+
     if (nextIndex >= pending.runnersToResolve.length) {
-      // All runners resolved — now finalize
-      set({
-        pendingRunnerResolution: { ...pending, resolvedRunners: newResolved, currentRunnerIndex: nextIndex, batterPlaced: true }
-      });
-      // Auto-finalize
-      setTimeout(() => get().finalizeHitResolution(), 0);
+      // All existing runners resolved.
+      // For forceout, batter is already placed/already out — skip batter step.
+      if (pending.hitType === 'forceout') {
+        set({
+          pendingRunnerResolution: { ...pending, resolvedRunners: newResolved, currentRunnerIndex: nextIndex, batterPlaced: true }
+        });
+        setTimeout(() => get().finalizeHitResolution(), 0);
+      } else {
+        // Enter batter step — let the user choose where the batter ended up
+        // (covers stretching, scoring, and out-on-bases scenarios).
+        set({
+          pendingRunnerResolution: { ...pending, resolvedRunners: newResolved, currentRunnerIndex: nextIndex, batterStep: true }
+        });
+      }
     } else {
       set({
         pendingRunnerResolution: { ...pending, resolvedRunners: newResolved, currentRunnerIndex: nextIndex }
@@ -554,12 +568,23 @@ export const useGameStore = create<GameState>()(
     }
   },
 
+  resolveBatter: (outcome) => {
+    const state = get();
+    const pending = state.pendingRunnerResolution;
+    if (!pending) return;
+    set({
+      pendingRunnerResolution: { ...pending, batterFinalBase: outcome, batterPlaced: true }
+    });
+    setTimeout(() => get().finalizeHitResolution(), 0);
+  },
+
   finalizeHitResolution: () => {
     const state = get();
     const pending = state.pendingRunnerResolution;
     if (!pending || !state.currentAtBat) return;
 
-    const newPast = pushUndo(state);
+    // Undo snapshot was already taken when the play was initiated — don't re-snapshot here,
+    // otherwise undo would restore an in-progress resolution and the outcome menu would be blocked.
     const { lineup, currentBatterIndex, atBats, currentAtBat } = state;
     const { battedThisCycle: newBatted, isLineupSet: newIsLineupSet } = completeBatterCycle(state, currentAtBat.batterId);
     const nextIndex = (currentBatterIndex + 1) % Math.max(1, lineup.length);
@@ -611,24 +636,46 @@ export const useGameStore = create<GameState>()(
       }
     });
 
-    // Place batter only if not already placed (forceout already placed batter)
+    // Place batter (or apply chosen outcome) — skip for forceout (batter already placed/out)
     if (!pending.skipOutCount) {
-      if (pending.hitType === '1B' || pending.hitType === 'error') newBases.first = pending.batterId;
-      if (pending.hitType === '2B') newBases.second = pending.batterId;
-      if (pending.hitType === '3B') newBases.third = pending.batterId;
+      const batterName = getPlayerName(state, pending.batterId);
+      if (pending.batterFinalBase) {
+        // User explicitly chose where the batter ended up (via batter step)
+        if (pending.batterFinalBase === 'scored') {
+          runsScored++;
+          details.push(`${batterName} scored`);
+        } else if (pending.batterFinalBase === 'out') {
+          newOuts++;
+          details.push(`${batterName} out advancing`);
+        } else if (pending.batterFinalBase === 'first') {
+          newBases.first = pending.batterId;
+        } else if (pending.batterFinalBase === 'second') {
+          newBases.second = pending.batterId;
+        } else if (pending.batterFinalBase === 'third') {
+          newBases.third = pending.batterId;
+        }
+      } else {
+        // No batter step (e.g. bases were empty) — auto-place by hit type
+        if (pending.hitType === '1B' || pending.hitType === 'error') newBases.first = pending.batterId;
+        if (pending.hitType === '2B') newBases.second = pending.batterId;
+        if (pending.hitType === '3B') newBases.third = pending.batterId;
+      }
     }
 
     let nextRunsInning = state.runsThisInning + runsScored;
     const nextRunsTotal = state.runsTotal + runsScored;
-    const nextInning = state.inning;
+    let nextInning = state.inning;
     let nextMode = state.mode;
 
-    // RBIs on errors = 0, forceout = 0
+    // RBIs on errors = 0, forceout = 0.
+    // RBIs are credited for runners scoring AND for the batter scoring (e.g. inside-the-park / on-base error),
+    // but NOT lost just because the batter himself made a baserunning out — the runs already scored still count.
     let resultStr = pending.hitType as string;
     let rbis = runsScored;
     if (isError) resultStr = 'ROE';
     if (isForceout) rbis = 0;
 
+    // Recompute the log entry with potentially-updated runsScored/newOuts (batter step may have changed them)
     const logEntry: InningLogEntry = {
       inning: state.inning, isOffense: true, batterId: currentAtBat.batterId,
       batterName: getPlayerName(state, currentAtBat.batterId),
@@ -643,6 +690,7 @@ export const useGameStore = create<GameState>()(
       newBases.first = null;
       newBases.second = null;
       newBases.third = null;
+      nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'offense');
     }
     // Check 5-run rule
     else if (nextRunsInning >= 5) {
@@ -652,10 +700,10 @@ export const useGameStore = create<GameState>()(
       newBases.first = null;
       newBases.second = null;
       newBases.third = null;
+      nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'offense');
     }
 
     set({
-      pastStates: newPast,
       atBats: [...atBats, completedAtBat],
       currentAtBat: null,
       currentBatterIndex: nextIndex,
@@ -689,7 +737,10 @@ export const useGameStore = create<GameState>()(
       return;
     }
 
+    // Snapshot at start so undo restores the pristine "batter up" state and dismisses the prompt.
+    const newPast = pushUndo(state);
     set({
+      pastStates: newPast,
       pendingForceOut: {
         batterId: state.currentAtBat.batterId,
         outType, x, y,
@@ -703,7 +754,7 @@ export const useGameStore = create<GameState>()(
     const pending = state.pendingForceOut;
     if (!pending || !state.currentAtBat) return;
 
-    const newPast = pushUndo(state);
+    // Undo snapshot was taken in initiateForceOut — don't re-snapshot here.
     const nextOuts = state.outs + 1;
     const newBases = { ...state.bases };
     const details: string[] = [];
@@ -742,7 +793,6 @@ export const useGameStore = create<GameState>()(
       const newLog = [...state.inningLog, logEntry];
       const nextInning = advanceInningIfNeeded(state.inning, state.startingSide, 'offense');
       set({
-        pastStates: newPast,
         atBats: [...state.atBats, completedAtBat],
         currentAtBat: null,
         currentBatterIndex: nextIndex,
@@ -790,7 +840,6 @@ export const useGameStore = create<GameState>()(
       };
 
       set({
-        pastStates: newPast,
         atBats: [...state.atBats, completedAtBat],
         currentAtBat: null,
         currentBatterIndex: nextIndex,
@@ -893,8 +942,11 @@ export const useGameStore = create<GameState>()(
     if (state.bases.first) runnersToResolve.push({ playerId: state.bases.first, fromBase: 'first' });
 
     if (runnersToResolve.length > 0) {
-      // Has runners — enter resolution mode (same as hits)
+      // Has runners — enter resolution mode (same as hits).
+      // Snapshot at start of play so undo wipes the whole error → resolution sequence.
+      const newPast = pushUndo(state);
       set({
+        pastStates: newPast,
         pendingRunnerResolution: {
           batterId: state.currentAtBat.batterId,
           hitType: 'error',
@@ -1297,3 +1349,4 @@ export const useGameStore = create<GameState>()(
 if (typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).useGameStore = useGameStore;
 }
+

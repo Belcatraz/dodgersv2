@@ -5,7 +5,7 @@ import type { HitType, OutType, HitTrajectory } from '../store';
 export default function BaseballField() {
   const { mode, initiateHit, logOffensiveOut, logOffensiveError, initiateForceOut,
           logDefensiveAction, scoreOpponentRun, roster, bases,
-          pendingRunnerResolution, resolveNextRunner, pendingForceOut, resolveForceOut, opponentRunsThisInning } = useGameStore();
+          pendingRunnerResolution, resolveNextRunner, resolveBatter, pendingForceOut, resolveForceOut, opponentRunsThisInning } = useGameStore();
   const [tapLocation, setTapLocation] = useState<{x: number, y: number} | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{type: 'hit' | 'out' | 'error', detail: string} | null>(null);
   
@@ -166,6 +166,51 @@ export default function BaseballField() {
           </div>
         </>
       )}
+
+      {/* ===== BATTER RESOLUTION STEP (after all existing runners resolved) ===== */}
+      {pendingRunnerResolution && pendingRunnerResolution.batterStep && !pendingRunnerResolution.batterFinalBase && (() => {
+        const batterName = getPlayerName(pendingRunnerResolution.batterId);
+        const ht = pendingRunnerResolution.hitType;
+        // Default base = the natural landing spot for this hit type. Stretching options
+        // are intentionally omitted: if the batter ended up on a different base, that
+        // would have been recorded as a different hit type up front.
+        const defaultBase: 'first' | 'second' | 'third' =
+          ht === '2B' ? 'second' : ht === '3B' ? 'third' : 'first';
+        const defaultLabel =
+          defaultBase === 'first' ? 'Safe at 1st' :
+          defaultBase === 'second' ? 'Safe at 2nd' : 'Safe at 3rd';
+        return (
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0,
+            backgroundColor: 'var(--bg-card)', padding: '16px', borderTopLeftRadius: '20px', borderTopRightRadius: '20px',
+            boxShadow: '0 -4px 12px rgba(0,0,0,0.5)', zIndex: 10,
+            display: 'flex', flexDirection: 'column', gap: '8px'
+          }}>
+            <h3 style={{textAlign: 'center', fontSize: '1rem', color: 'var(--text-secondary)', margin: 0}}>
+              Batter
+            </h3>
+            <h2 style={{textAlign: 'center', fontSize: '1.25rem', margin: '0'}}>
+              Where did <span style={{color: 'var(--dodger-blue)'}}>{batterName}</span> end up?
+            </h2>
+            {/* Primary default — most common outcome, big button */}
+            <button
+              className="huge-btn"
+              style={{backgroundColor: '#4caf50', color: 'white', fontSize: '1.05rem', fontWeight: 'bold', marginTop: '4px'}}
+              onClick={() => resolveBatter(defaultBase)}
+            >
+              {defaultLabel}
+            </button>
+            {/* Out advancing — the rare-but-legit case (single + tagged out trying for next base) */}
+            <button
+              className="huge-btn"
+              style={{backgroundColor: 'var(--dodger-red)', color: 'white', fontSize: '1rem'}}
+              onClick={() => resolveBatter('out')}
+            >
+              Out advancing
+            </button>
+          </div>
+        );
+      })()}
 
       {/* ===== BASERUNNER RESOLUTION OVERLAY ===== */}
       {pendingRunnerResolution && currentResolveRunner && (
