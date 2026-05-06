@@ -1,14 +1,28 @@
+import { useState, useEffect } from 'react';
 import { useGameStore } from './store';
 import LineupManager from './components/LineupManager';
 import PitchTracker from './components/PitchTracker';
 import BaseballField from './components/BaseballField';
 import Dashboard from './components/Dashboard';
+import DebugPanel from './components/DebugPanel';
+import { isDebugEnabled } from './debugLog';
 import { isCoachView } from './isCoachView';
 import './App.css';
 
 function App() {
   const { mode, inning, outs, runsThisInning, runsTotal, opponentRunsThisInning, opponentRunsTotal, gameStarted, undo, pastStates,
           bases, roster, manualSwitchToDefense, manualSwitchToOffense } = useGameStore();
+  const debugOn = isDebugEnabled();
+  const [debugOpen, setDebugOpen] = useState(false);
+
+  // Safety net: if we ever land in offense mode without an active at-bat
+  // (e.g. persisted state caught mid-strikeout, or footer nav skipping
+  // startNextAtBat), recreate one so the field doesn't render blank.
+  useEffect(() => {
+    if (gameStarted && mode === 'offense' && !useGameStore.getState().currentAtBat) {
+      useGameStore.getState().startNextAtBat();
+    }
+  }, [gameStarted, mode]);
 
   if (isCoachView()) {
     return (
@@ -45,11 +59,10 @@ function App() {
     <div className="flex-col w-full" style={{ height: '100%', overflow: 'hidden' }}>
       {gameStarted && mode !== 'lineup' && (
         <header className="flex-col" style={{backgroundColor: 'var(--bg-card)', borderBottom: '1px solid #333', padding: '8px 16px'}}>
-          {/* Top Row: Undo + Inning + Runs + Outs */}
           <div className="flex-row justify-between items-center">
             <div className="flex-row items-center" style={{gap: '8px'}}>
-              <button 
-                className="huge-btn btn-secondary" 
+              <button
+                className="huge-btn btn-secondary"
                 style={{height: '28px', fontSize: '0.75rem', padding: '0 8px'}}
                 onClick={undo}
                 disabled={pastStates.length === 0}
@@ -77,8 +90,7 @@ function App() {
               <span style={{fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--dodger-red)'}}>{outs}</span>
             </div>
           </div>
-          
-          {/* Base Runners Row (only show on offense) */}
+
           {mode === 'offense' && (bases.first || bases.second || bases.third) && (
             <div className="flex-row" style={{gap: '6px', marginTop: '4px'}}>
               {baseIndicators.filter(b => b.occupied).map(b => (
@@ -116,13 +128,12 @@ function App() {
 
       <footer className="p-md border-t" style={{backgroundColor: 'var(--bg-card)', borderColor: '#333'}}>
         <div className="flex-row gap-sm">
-          <button 
+          <button
             className={`huge-btn flex-1 ${mode === 'offense' ? 'btn-primary' : 'btn-secondary'}`}
             style={{fontSize: '0.9rem', opacity: gameStarted ? 1 : 0.5}}
             onClick={() => {
               if (gameStarted) {
                 if (mode === 'defense') {
-                  // Switching from defense to offense = new inning
                   manualSwitchToOffense();
                 } else {
                   useGameStore.getState().setMode('offense');
@@ -133,7 +144,7 @@ function App() {
           >
             Offense
           </button>
-          <button 
+          <button
             className={`huge-btn flex-1 ${mode === 'defense' ? 'btn-primary' : 'btn-secondary'}`}
             style={{fontSize: '0.9rem', opacity: gameStarted ? 1 : 0.5}}
             onClick={() => {
@@ -149,14 +160,14 @@ function App() {
           >
             Defense
           </button>
-          <button 
+          <button
             className={`huge-btn flex-1 ${mode === 'dashboard' ? 'btn-primary' : 'btn-secondary'}`}
             style={{fontSize: '0.9rem'}}
             onClick={() => useGameStore.getState().setMode('dashboard')}
           >
             Stats
           </button>
-          <button 
+          <button
             className={`huge-btn flex-1 ${(mode as string) === 'lineup' ? 'btn-primary' : 'btn-secondary'}`}
             style={{fontSize: '0.9rem'}}
             onClick={() => useGameStore.getState().setMode('lineup')}
@@ -165,6 +176,31 @@ function App() {
           </button>
         </div>
       </footer>
+
+      {debugOn && !debugOpen && (
+        <button
+          onClick={() => setDebugOpen(true)}
+          aria-label="Open debug panel"
+          style={{
+            position: 'fixed',
+            right: '10px',
+            bottom: '76px',
+            width: '40px',
+            height: '40px',
+            borderRadius: '50%',
+            border: '1px solid #333',
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            color: '#0f0',
+            fontSize: '1.1rem',
+            zIndex: 998,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+            cursor: 'pointer',
+          }}
+        >
+          🐞
+        </button>
+      )}
+      {debugOn && debugOpen && <DebugPanel onClose={() => setDebugOpen(false)} />}
     </div>
   );
 }

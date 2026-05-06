@@ -5,8 +5,12 @@ export default function PitchTracker() {
   const {
     currentAtBat, logPitch, roster, lineup, currentBatterIndex,
     pushToLineup, isLineupSet, setCurrentBatterIndex, battedThisCycle,
-    addLateJoinerToLineup,
+    addLateJoinerToLineup, pendingRunnerResolution, pendingForceOut,
   } = useGameStore();
+
+  // Lock pitch buttons while a baserunner-resolution or force-out overlay is up.
+  // Otherwise stray taps mutate the wrong at-bat and the strike count drifts.
+  const pitchLocked = !!pendingRunnerResolution || !!pendingForceOut;
 
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -107,16 +111,36 @@ export default function PitchTracker() {
 
       {/* Pitch buttons */}
       <div className="flex-row gap-sm mt-sm">
-        <button className="huge-btn flex-1" style={{ backgroundColor: 'var(--dodger-red)', color: 'white' }} onClick={() => logPitch('strike')}>
+        <button
+          className="huge-btn flex-1"
+          style={{ backgroundColor: 'var(--dodger-red)', color: 'white', opacity: pitchLocked ? 0.4 : 1 }}
+          onClick={() => logPitch('strike')}
+          disabled={pitchLocked}
+        >
           Strike
         </button>
-        <button className="huge-btn flex-1" style={{ backgroundColor: '#ff9800', color: 'white' }} onClick={() => logPitch('foul')}>
+        <button
+          className="huge-btn flex-1"
+          style={{ backgroundColor: '#ff9800', color: 'white', opacity: pitchLocked ? 0.4 : 1 }}
+          onClick={() => logPitch('foul')}
+          disabled={pitchLocked}
+        >
           Foul
         </button>
-        <button className="huge-btn btn-secondary flex-1" onClick={() => logPitch('no-swing')}>
+        <button
+          className="huge-btn btn-secondary flex-1"
+          onClick={() => logPitch('no-swing')}
+          disabled={pitchLocked}
+          style={{ opacity: pitchLocked ? 0.4 : 1 }}
+        >
           No Swing
         </button>
       </div>
+      {pitchLocked && (
+        <div style={{ fontSize: '0.7rem', color: '#888', textAlign: 'center', marginTop: '4px' }}>
+          Finish the play below before logging more pitches.
+        </div>
+      )}
 
       {/* Bottom-sheet picker overlay */}
       {pickerOpen && (

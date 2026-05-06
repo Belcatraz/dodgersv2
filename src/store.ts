@@ -594,8 +594,13 @@ export const useGameStore = create<GameState>()(
 
     let completedAtBat;
     if (isForceout) {
-      // For forceout, we already have the out event from resolveForceOut
-      completedAtBat = { ...currentAtBat };
+      // Append the out event so the play shows up correctly in history.
+      // (Earlier comment claimed resolveForceOut handled it, but the
+      //  multi-runner branch never did.)
+      completedAtBat = {
+        ...currentAtBat,
+        events: [...currentAtBat.events, { type: 'out' as const, outType: 'Forceout' as OutType, x: pending.x, y: pending.y }],
+      };
     } else if (isError) {
       completedAtBat = { ...currentAtBat, events: [...currentAtBat.events, { type: 'error' as const, trajectory: pending.trajectory!, x: pending.x!, y: pending.y! }] };
     } else {
@@ -927,6 +932,9 @@ export const useGameStore = create<GameState>()(
       inningLog: newLog,
       battedThisCycle: newBatted,
       isLineupSet: newIsLineupSet,
+      // Clear any in-flight overlays — an out fully resolves the play.
+      pendingRunnerResolution: null,
+      pendingForceOut: null,
     });
     get().startNextAtBat();
   },
